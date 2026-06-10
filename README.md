@@ -9,7 +9,18 @@ Two small, independent features:
    - `✿ <name>` — Claude is waiting for you to approve a tool/permission
 2. **Unique bar color per session** — every new interactive `claude` session opens with a different `/color`, so tabs are visually distinct at a glance.
 
-Both work on top of Claude Code's native tab naming (which already shows the conversation title + a spinner while it's working). This repo only adds the *"it needs me"* signal and the per-session color.
+### Tab states at a glance
+
+Claude Code already animates the tab while a session works and marks it when idle. This repo adds the two *"it needs me"* states. Together, the tab prefix tells you each session's state across all your tabs:
+
+| Prefix | State | Source |
+| --- | --- | --- |
+| `⠋` — moving braille dot (animated) | Working / generating | Claude Code (native) |
+| `✳` | Finished — idle, waiting for your next message | Claude Code (native) |
+| `✦` | Asking a clarifying question (`AskUserQuestion`) | **this repo** |
+| `✿` | Waiting for you to approve a permission | **this repo** |
+
+All four show alongside the **conversation name** (not the folder). This repo only emits `✦` / `✿`; the working (moving dot) and finished (`✳`) glyphs are Claude Code's own — listed here so the full vocabulary lives in one place. The per-session color (feature 2) is independent of all of these.
 
 ---
 
