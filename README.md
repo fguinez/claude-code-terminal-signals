@@ -11,16 +11,16 @@ Two small, independent features:
 
 ### Tab states at a glance
 
-Claude Code already animates the tab while a session works and marks it when idle. This repo adds the two *"it needs me"* states. Together, the tab prefix tells you each session's state across all your tabs:
+By default, Claude Code already labels the tab with the conversation's AI-generated title and animates a working/idle indicator — so you can tell sessions apart by *what they're about*, not just by folder. This repo extends that to the two states where Claude is **blocked on you**:
 
 | Prefix | State | Source |
 | --- | --- | --- |
-| `⠋` — moving braille dot (animated) | Working / generating | Claude Code (native) |
-| `✳` | Finished — idle, waiting for your next message | Claude Code (native) |
+| `⠋` — moving braille dot (animated) | Working / generating | Claude Code (built-in) |
+| `✳` | Finished — idle, waiting for your next message | Claude Code (built-in) |
 | `✦` | Asking a clarifying question (`AskUserQuestion`) | **this repo** |
 | `✿` | Waiting for you to approve a permission | **this repo** |
 
-All four show alongside the **conversation name** (not the folder). This repo only emits `✦` / `✿`; the working (moving dot) and finished (`✳`) glyphs are Claude Code's own — listed here so the full vocabulary lives in one place. The per-session color (feature 2) is independent of all of these.
+All four show alongside the **conversation name**. This repo only emits `✦` / `✿`, via an **OSC 0** title escape returned from a hook (`{"terminalSequence":"]0;…"}`). The working (moving dot) and finished (`✳`) indicators are Claude Code's built-in tab status, set through its **own** title mechanism (process-level / OSC 2) — a different path than the hook's, which is why they coexist. Those native glyphs aren't officially documented and may vary by version/terminal; they're listed here only so the full vocabulary lives in one place. The per-session color (feature 2) is independent of all of these.
 
 ---
 
