@@ -9,6 +9,14 @@ Two small, independent features:
    - `✿ <name>` — Claude is waiting for you to approve a tool/permission
 2. **Unique bar color per session** — every new interactive `claude` session opens with a different `/color`, so tabs are visually distinct at a glance.
 
+## Demo
+
+![Four Claude Code terminal tabs, each in a different session color, each prefixed by a state glyph: ⠋ working, ✳ finished, ✦ clarifying question, ✿ permission prompt — with the conversation name as the label](docs/tab-states.svg)
+
+*Two sessions need you (`✦`, `✿`) and two don't (`⠋`, `✳`) — and each is a different color. You can tell which is which without opening any of them.*
+
+> Mockup illustrating the states. To drop in a real recording, save a GIF/PNG to `docs/` and point this `![...]()` at it.
+
 ### Tab states at a glance
 
 By default, Claude Code already labels the tab with the conversation's AI-generated title and animates a working/idle indicator — so you can tell sessions apart by *what they're about*, not just by folder. This repo extends that to the two states where Claude is **blocked on you**:
