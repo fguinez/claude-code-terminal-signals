@@ -19,8 +19,16 @@ claude() {
       *) has_prompt=1 ;;
     esac
   done
+  # On exit, reset the tab title to the shell name (e.g. "zsh") so the tab looks
+  # like a freshly opened terminal again. Skipped when headless or there's no TTY.
+  local interactive=0 _orig=${SHELL:t}
+  [[ -n $_orig ]] || _orig=${ZSH_NAME:-zsh}
+  (( ! headless )) && [[ -t 1 ]] && interactive=1
+
   if (( headless )) || (( has_prompt )) || [[ ! -t 1 ]]; then
-    command claude "$@"; return
+    command claude "$@"
+    (( interactive )) && printf '\033]0;%s\007' "$_orig"
+    return
   fi
 
   local dir="$HOME/.claude/session-colors"
@@ -57,5 +65,6 @@ claude() {
     command claude "$@"
   fi
   (( owns_lock )) && rm -rf "$dir/$color.lock"
+  (( interactive )) && printf '\033]0;%s\007' "$_orig"
 }
 # === end claude-code-terminal-signals color ===
