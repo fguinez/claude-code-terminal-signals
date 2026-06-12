@@ -114,3 +114,8 @@ echo
 echo "Done. Next steps:"
 [ "$DO_HOOKS" -eq 1 ] && echo "  • Restart Claude Code (or start a new session) so the new hooks load."
 [ "$DO_COLOR" -eq 1 ] && echo "  • Run 'source ~/.zshrc' (or open a new terminal) to enable per-session colors."
+if [ "$DO_HOOKS" -eq 1 ]; then
+  echo "  • Cursor / VS Code integrated terminal? Its tabs don't show OSC titles by"
+  echo "    default — add this to your editor settings.json so the glyphs appear:"
+  echo '        "terminal.integrated.tabs.title": "${sequence}"'
+fi
