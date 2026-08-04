@@ -30,7 +30,11 @@ By default, Claude Code already labels the tab with the conversation's AI-genera
 | `✦` | Asking a clarifying question (`AskUserQuestion`) | **this repo** |
 | `✿` | Waiting for you to approve a permission | **this repo** |
 
-All five show alongside the **conversation name**. This repo emits `✦` / `✿` / `⧗` via an **OSC 0** title escape returned from a hook (`{"terminalSequence":"]0;…"}`). The working (moving dot) and finished (`✳`) indicators are Claude Code's built-in tab status, set through its **own** title mechanism (process-level / OSC 2) — a different path than the hook's, which is why they coexist — and why a hook glyph gives way as soon as Claude writes its next native title. Those native glyphs aren't officially documented and may vary by version/terminal; they're listed here only so the full vocabulary lives in one place. The per-session color (feature 2) is independent of all of these.
+All five show alongside the **conversation name**. `✦` and `✿` are emitted as an **OSC 0** title escape returned from a hook (`{"terminalSequence":"]0;…"}`). They fire mid-turn, while Claude is blocked on you and not retitling, so the glyph sticks.
+
+`⧗` can't work that way. It fires on `Stop`, and Claude Code writes its own `✳` title *after* it processes hook output — so a title returned from a `Stop` hook is emitted and then immediately overwritten. Instead `term-busy.sh` writes nothing to stdout and hands off to `term-defer.sh`, a detached helper that waits for Claude to report the turn finished (its `status` in `<config>/sessions/<pid>.json` stops reading `busy`, ~120 ms after the hook runs), lets the native title land, and only then writes the glyph to the tty that owns the tab. If the turn has resumed by then it writes nothing, so a stale `⧗` can never sit on a working session.
+
+The working (moving dot) and finished (`✳`) indicators are Claude Code's built-in tab status, set through its **own** title mechanism (process-level / OSC 2) — a different path than the hook's, which is why they coexist, and why a hook glyph gives way as soon as Claude writes its next native title. Those native glyphs aren't officially documented and may vary by version/terminal; they're listed here only so the full vocabulary lives in one place. The per-session color (feature 2) is independent of all of these.
 
 ---
 
