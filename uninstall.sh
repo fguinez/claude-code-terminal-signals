@@ -31,7 +31,11 @@ try:
 except Exception:
     sys.exit(0)
 hooks = cfg.get('hooks', {})
-for event, needle in (('PreToolUse', 'term-title.sh'), ('PermissionRequest', 'term-perm.sh')):
+for event, needle in (('PreToolUse', 'term-title.sh'),
+                      ('PermissionRequest', 'term-perm.sh'),
+                      ('Stop', 'term-busy.sh'),
+                      ('SubagentStart', 'term-agents.sh'),
+                      ('SubagentStop', 'term-agents.sh')):
     kept = []
     for g in hooks.get(event, []):
         g = dict(g)
