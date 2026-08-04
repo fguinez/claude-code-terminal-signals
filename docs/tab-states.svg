@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="760" height="340" viewBox="0 0 760 340" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="390" viewBox="0 0 760 390" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
   <defs>
     <style>
       .name { fill: #cdd6f4; font-size: 16px; }
@@ -10,7 +10,7 @@
   </defs>
 
   <!-- panel -->
-  <rect x="8" y="8" width="744" height="324" rx="12" fill="#181825" stroke="#313244" stroke-width="1"/>
+  <rect x="8" y="8" width="744" height="374" rx="12" fill="#181825" stroke="#313244" stroke-width="1"/>
 
   <!-- title bar -->
   <circle cx="32" cy="34" r="6" fill="#f38ba8"/>
@@ -31,19 +31,25 @@
   <text x="78" y="143" class="name">Evaluate adding Dependabot</text>
   <text x="736" y="143" class="cap" text-anchor="end">finished · green session</text>
 
-  <!-- row 3: question (red session) — needs you -->
-  <rect x="24" y="174" width="4" height="26" rx="2" fill="#f38ba8"/>
-  <text x="44" y="193" class="glyph" fill="#f9e2af">✦</text>
-  <text x="78" y="193" class="name">Fix terminal name display</text>
-  <text x="736" y="193" class="cap" text-anchor="end">clarifying question · red session</text>
+  <!-- row 3: background work still running (purple session) — looks finished, isn't -->
+  <rect x="24" y="174" width="4" height="26" rx="2" fill="#cba6f7"/>
+  <text x="44" y="193" class="glyph" fill="#89dceb">⧗</text>
+  <text x="78" y="193" class="name">Watch the release pipeline</text>
+  <text x="736" y="193" class="cap" text-anchor="end">background work · purple session</text>
 
-  <!-- row 4: permission (orange session) — needs you -->
-  <rect x="24" y="224" width="4" height="26" rx="2" fill="#fab387"/>
-  <text x="44" y="243" class="glyph" fill="#f5c2e7">✿</text>
-  <text x="78" y="243" class="name">Migrate auth module</text>
-  <text x="736" y="243" class="cap" text-anchor="end">permission prompt · orange session</text>
+  <!-- row 4: question (red session) — needs you -->
+  <rect x="24" y="224" width="4" height="26" rx="2" fill="#f38ba8"/>
+  <text x="44" y="243" class="glyph" fill="#f9e2af">✦</text>
+  <text x="78" y="243" class="name">Fix terminal name display</text>
+  <text x="736" y="243" class="cap" text-anchor="end">clarifying question · red session</text>
 
-  <line x1="24" y1="272" x2="736" y2="272" stroke="#313244" stroke-width="1"/>
-  <text x="24" y="298" class="foot">Glyph = state · left bar color = unique per session · name = the conversation</text>
-  <text x="24" y="318" class="foot"><tspan fill="#f9e2af">✦</tspan> and <tspan fill="#f5c2e7">✿</tspan> mean a session is waiting on you — spot it across a wall of tabs.</text>
+  <!-- row 5: permission (orange session) — needs you -->
+  <rect x="24" y="274" width="4" height="26" rx="2" fill="#fab387"/>
+  <text x="44" y="293" class="glyph" fill="#f5c2e7">✿</text>
+  <text x="78" y="293" class="name">Migrate auth module</text>
+  <text x="736" y="293" class="cap" text-anchor="end">permission prompt · orange session</text>
+
+  <line x1="24" y1="322" x2="736" y2="322" stroke="#313244" stroke-width="1"/>
+  <text x="24" y="348" class="foot">Glyph = state · left bar color = unique per session · name = the conversation</text>
+  <text x="24" y="368" class="foot"><tspan fill="#f9e2af">✦</tspan> / <tspan fill="#f5c2e7">✿</tspan> = waiting on you · <tspan fill="#89dceb">⧗</tspan> = looks finished, but work is still running.</text>
 </svg>
