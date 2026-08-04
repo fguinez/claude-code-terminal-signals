@@ -33,7 +33,11 @@ transcript = data.get('transcript_path') or ''
 
 
 def manual_name(sid):
-    # Claude /rename writes the chosen name to ~/.claude/sessions/<pid>.json.
+    # Claude /rename writes the chosen name to ~/.claude/sessions/<pid>.json —
+    # but so does Claude itself, marking its own cwd-derived label
+    # nameSource="derived". Only an explicit rename outranks the AI title;
+    # honouring a derived name shows "connections-d6" where the native tab shows
+    # the conversation's real title.
     if not sid:
         return ''
     for f in glob.glob(os.path.expanduser('~/.claude/sessions/*.json')):
@@ -42,6 +46,8 @@ def manual_name(sid):
         except Exception:
             continue
         if d.get('sessionId') == sid:
+            if d.get('nameSource') == 'derived':
+                return ''
             return (d.get('name') or '').strip()
     return ''
 
