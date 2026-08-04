@@ -33,9 +33,11 @@ command -v python3 >/dev/null 2>&1 || { echo "✗ python3 is required (used to s
 
 echo "→ Installing to: $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
-cp "$REPO_DIR/hooks/term-title.sh" "$REPO_DIR/hooks/term-perm.sh" "$INSTALL_DIR/"
+cp "$REPO_DIR/hooks/term-title.sh" "$REPO_DIR/hooks/term-perm.sh" \
+   "$REPO_DIR/hooks/term-busy.sh" "$REPO_DIR/hooks/term-agents.sh" "$INSTALL_DIR/"
 cp "$REPO_DIR/shell/claude-session-color.zsh" "$INSTALL_DIR/"
-chmod +x "$INSTALL_DIR/term-title.sh" "$INSTALL_DIR/term-perm.sh"
+chmod +x "$INSTALL_DIR/term-title.sh" "$INSTALL_DIR/term-perm.sh" \
+         "$INSTALL_DIR/term-busy.sh" "$INSTALL_DIR/term-agents.sh"
 
 # ---------------------------------------------------------------------------
 # Feature 1 — tab attention glyphs (Claude Code hooks)
@@ -50,6 +52,8 @@ d = os.environ['INSTALL_DIR']
 settings = os.environ['SETTINGS']
 title_cmd = 'sh "%s/term-title.sh" "✦"' % d   # ✦ for clarifying questions
 perm_cmd  = 'sh "%s/term-perm.sh"' % d             # ✦ question / ✿ permission
+busy_cmd  = 'sh "%s/term-busy.sh"' % d             # ⧗ turn ended, background work still running
+agent_cmd = 'sh "%s/term-agents.sh"' % d           # tracks background subagents for term-busy.sh
 
 try:
     with open(settings) as f:
@@ -85,6 +89,18 @@ strip('PermissionRequest', 'term-perm.sh')
 hooks.setdefault('PermissionRequest', []).insert(0, {
     'hooks': [{'type': 'command', 'command': perm_cmd}],
 })
+
+strip('Stop', 'term-busy.sh')
+hooks.setdefault('Stop', []).insert(0, {
+    'hooks': [{'type': 'command', 'command': busy_cmd}],
+})
+
+# A subagent leaves no process behind, so its start/stop are recorded as markers.
+for event in ('SubagentStart', 'SubagentStop'):
+    strip(event, 'term-agents.sh')
+    hooks.setdefault(event, []).insert(0, {
+        'hooks': [{'type': 'command', 'command': agent_cmd}],
+    })
 
 with open(settings, 'w') as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
