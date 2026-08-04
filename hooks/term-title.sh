@@ -95,5 +95,10 @@ name = re.sub(r'\s+', ' ', name).strip()
 name = ''.join(ch for ch in name if ch >= ' ')[:60].strip() or 'claude'
 
 seq = '\x1b]0;{} {}\x07'.format(glyph, name)
-print(json.dumps({'terminalSequence': seq}))
+# TERM_TITLE_RAW: hand back the bare sequence instead of the hook-protocol JSON,
+# for callers that write to a tty themselves (term-defer.sh).
+if os.environ.get('TERM_TITLE_RAW'):
+    print(seq, end='')
+else:
+    print(json.dumps({'terminalSequence': seq}))
 PY

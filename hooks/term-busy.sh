@@ -20,6 +20,11 @@
 #
 # Emits nothing when no work is left, leaving Claude Code's native ✳ untouched —
 # so the tab still reads as "your turn" in the normal case.
+#
+# The glyph is written by a detached helper rather than returned as this hook's
+# `terminalSequence`: Claude Code writes its own ✳ title *after* it processes
+# hook output, so a title returned from here is always overwritten. See
+# term-defer.sh.
 glyph="${TERM_BUSY_GLYPH:-⧗}"
 payload="$(cat 2>/dev/null)"
 
@@ -132,7 +137,7 @@ def live_agents(session, transcript):
 session = data.get('session_id') or ''
 owner, shells = background_shells()
 agents = live_agents(session, data.get('transcript_path') or '') if session else []
-print(len(shells) + len(agents))
+print('%d %s' % (len(shells) + len(agents), owner or 0))
 
 # `touch ~/.claude/terminal-signals.debug` to trace what the hook saw — a Stop
 # hook is otherwise invisible, and hooks only reload on a fresh session.
@@ -142,9 +147,27 @@ if os.path.exists(os.path.join(CONFIG, 'terminal-signals.debug')):
 PY
 )
 
-[ "${running:-0}" -gt 0 ] || exit 0
+# The python above prints "<count> <owning claude pid>".
+set -- ${running:-0 0}
+count=$1
+owner=$2
+[ "$count" -gt 0 ] || exit 0
 
-# Resolve term-title.sh next to this script so the set stays install-location
+# Resolve the sibling scripts next to this one so the set stays install-location
 # independent, and forward the payload — stdin is already consumed here.
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-TERM_TITLE_PAYLOAD="$payload" exec sh "$DIR/term-title.sh" "$glyph"
+CONFIG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+
+# Build the raw escape sequence rather than the hook-protocol JSON: it is written
+# to the tty later, by term-defer.sh, not returned to Claude Code.
+seq=$(TERM_TITLE_RAW=1 TERM_TITLE_PAYLOAD="$payload" sh "$DIR/term-title.sh" "$glyph")
+[ -n "$seq" ] || exit 0
+
+# The owning `claude` holds the tty the tab belongs to; hooks get no tty of their own.
+tty=$(ps -o tty= -p "$owner" 2>/dev/null | tr -d ' ')
+case "$tty" in ''|'??'|'?') exit 0 ;; esac
+[ -w "/dev/$tty" ] || exit 0
+
+nohup sh "$DIR/term-defer.sh" "/dev/$tty" "$CONFIG/sessions/$owner.json" "$seq" \
+  >/dev/null 2>&1 &
+exit 0

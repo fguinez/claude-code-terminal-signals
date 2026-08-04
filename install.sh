@@ -34,10 +34,12 @@ command -v python3 >/dev/null 2>&1 || { echo "✗ python3 is required (used to s
 echo "→ Installing to: $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 cp "$REPO_DIR/hooks/term-title.sh" "$REPO_DIR/hooks/term-perm.sh" \
-   "$REPO_DIR/hooks/term-busy.sh" "$REPO_DIR/hooks/term-agents.sh" "$INSTALL_DIR/"
+   "$REPO_DIR/hooks/term-busy.sh" "$REPO_DIR/hooks/term-agents.sh" \
+   "$REPO_DIR/hooks/term-defer.sh" "$INSTALL_DIR/"
 cp "$REPO_DIR/shell/claude-session-color.zsh" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/term-title.sh" "$INSTALL_DIR/term-perm.sh" \
-         "$INSTALL_DIR/term-busy.sh" "$INSTALL_DIR/term-agents.sh"
+         "$INSTALL_DIR/term-busy.sh" "$INSTALL_DIR/term-agents.sh" \
+         "$INSTALL_DIR/term-defer.sh"
 
 # ---------------------------------------------------------------------------
 # Feature 1 — tab attention glyphs (Claude Code hooks)
