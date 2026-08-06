@@ -32,7 +32,7 @@ By default, Claude Code already labels the tab with the conversation's AI-genera
 
 All five show alongside the **conversation name**. `✦` and `✿` are emitted as an **OSC 0** title escape returned from a hook (`{"terminalSequence":"]0;…"}`). They fire mid-turn, while Claude is blocked on you and not retitling, so the glyph sticks.
 
-`⧗` can't work that way. It fires on `Stop`, and Claude Code writes its own `✳` title *after* it processes hook output — so a title returned from a `Stop` hook is emitted and then immediately overwritten. Instead `term-busy.sh` writes nothing to stdout and hands off to `term-defer.sh`, a detached helper that waits for Claude to report the turn finished (its `status` in `<config>/sessions/<pid>.json` stops reading `busy`, ~120 ms after the hook runs), lets the native title land, and only then writes the glyph to the tty that owns the tab. If the turn has resumed by then it writes nothing, so a stale `⧗` can never sit on a working session.
+`⧗` can't work that way. It fires on `Stop`, and Claude Code writes its own `✳` title *after* it processes hook output — so a title returned from a `Stop` hook is emitted and then immediately overwritten. Instead `term-busy.sh` writes nothing to stdout and hands off to `term-defer.sh`, a detached helper that waits for Claude to report the turn finished (its `status` in `<config>/sessions/<pid>.json` stops reading `busy`, ~120 ms after the hook runs), lets the native title land, and only then writes the glyph to the tty that owns the tab. That wait doubles as the check for whether the `⧗` is still warranted — the same `status` says whether a background shell is running. If the turn has resumed by then it writes nothing, so a stale `⧗` can never sit on a working session.
 
 The working (moving dot) and finished (`✳`) indicators are Claude Code's built-in tab status, set through its **own** title mechanism (process-level / OSC 2) — a different path than the hook's, which is why they coexist, and why a hook glyph gives way as soon as Claude writes its next native title. Those native glyphs aren't officially documented and may vary by version/terminal; they're listed here only so the full vocabulary lives in one place. The per-session color (feature 2) is independent of all of these.
 
@@ -138,7 +138,9 @@ Two kinds of work can outlive a turn, and each needs its own detection.
 
 #### Background shells
 
-There's no hook or state file that reports "this session still has shells running", so `term-busy.sh` reads it off the process table. Claude Code runs **every** `Bash` tool call as a direct child of the `claude` process, wrapped in a recognizable preamble:
+Claude Code answers this one itself. The session state file it keeps at `<config>/sessions/<pid>.json` carries a `status` field whose values are `busy` (a turn is running), `shell`, `idle` and `waiting` — and it reads **`shell`** for exactly as long as a background bash task is alive. That field only flips *after* the `Stop` hook returns, which is fine: `term-defer.sh` is already waiting for the turn to settle before it writes, so it reads the settled value and decides there.
+
+The process table is scanned too, as a fallback for when that file can't be read. Claude Code runs **every** `Bash` tool call as a direct child of the `claude` process, wrapped in a recognizable preamble:
 
 ```
 /bin/zsh -c source ~/.claude/shell-snapshots/snapshot-….sh && … &&
@@ -150,7 +152,9 @@ A background call is just one of those still alive when the turn ends. So the ho
 - **By signature** — `claude` also parents MCP servers, `caffeinate`, and git helpers. None of them carry the shell-snapshot preamble, so none of them count.
 - **By ancestry** — the hook itself runs inside one of those very shells. Every pid on the walk up is excluded, so a session never sees itself as busy.
 
-If the process layout ever changes, the count comes out `0` and you simply get today's behaviour (native `✳`) — it fails quiet, not loud.
+The walk needs to recognize the owning `claude`, and its `argv` is not dependable — a wrapper function can change it, and on a case-insensitive filesystem `CLAUDE` starts Claude Code just as well. So an ancestor is identified by the state file it keeps (matched on `sessionId`), and only failing that by name, case-insensitively.
+
+Both layers fail quiet: if the process layout changes *and* the state file can't be read, nothing is written and you get today's behaviour (native `✳`).
 
 #### Background subagents
 
