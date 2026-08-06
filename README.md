@@ -150,6 +150,8 @@ A background call is just one of those still alive when the turn ends. So the ho
 - **By signature** — `claude` also parents MCP servers, `caffeinate`, and git helpers. None of them carry the shell-snapshot preamble, so none of them count.
 - **By ancestry** — the hook itself runs inside one of those very shells. Every pid on the walk up is excluded, so a session never sees itself as busy.
 
+The walk has to recognize the owning `claude`, and its `argv` is not dependable — a wrapper function can change it, and on a case-insensitive filesystem `CLAUDE` starts Claude Code just as well. So an ancestor is identified by the state file it keeps (`<config>/sessions/<pid>.json`, matched on `sessionId`), and only failing that by name, case-insensitively.
+
 If the process layout ever changes, the count comes out `0` and you simply get today's behaviour (native `✳`) — it fails quiet, not loud.
 
 #### Background subagents

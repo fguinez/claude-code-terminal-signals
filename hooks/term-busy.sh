@@ -65,16 +65,35 @@ def process_table():
     return table
 
 
-def is_claude(cmd):
+def session_state(pid):
+    """Contents of the state file `claude` keeps for itself, if any."""
+    try:
+        with open(os.path.join(CONFIG, 'sessions', '%d.json' % pid)) as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def is_owner(pid, cmd, session):
+    """Is this ancestor the `claude` process the tab belongs to?
+
+    The state file is the reliable test — it names the session outright. argv is
+    only the fallback, and is matched case-insensitively: on a case-insensitive
+    filesystem `CLAUDE` also starts Claude Code (bypassing any `claude` shell
+    wrapper), and such a session used to go unrecognised and stay stuck on ✳.
+    """
+    state = session_state(pid)
+    if state is not None and (state.get('sessionId') == session or not session):
+        return True
     head = cmd.split(None, 1)[0] if cmd else ''
-    return os.path.basename(head) == 'claude'
+    return os.path.basename(head).lower() == 'claude'
 
 
 def is_tool_shell(cmd):
     return all(s in cmd for s in SIGNATURE) and not any(o in cmd for o in OURS)
 
 
-def background_shells():
+def background_shells(session):
     """Tool shells of the owning `claude` that outlived the turn."""
     table = process_table()
     # Walk up to the owning `claude`, remembering the chain — the hook itself
@@ -85,7 +104,7 @@ def background_shells():
         parent = table.get(pid, (0, ''))[0]
         if parent <= 1:
             break
-        if is_claude(table.get(parent, (0, ''))[1]):
+        if is_owner(parent, table.get(parent, (0, ''))[1], session):
             owner = parent
             break
         pid = parent
@@ -135,7 +154,7 @@ def live_agents(session, transcript):
 
 
 session = data.get('session_id') or ''
-owner, shells = background_shells()
+owner, shells = background_shells(session)
 agents = live_agents(session, data.get('transcript_path') or '') if session else []
 print('%d %s' % (len(shells) + len(agents), owner or 0))
 
