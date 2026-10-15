@@ -200,12 +200,14 @@ It passes straight through (no color) when headless (`-p`/`--print`), when there
 | Pill | Shows |
 | --- | --- |
 | mauve | Model and effort: `Opus 5.5 (high)` |
-| peach | The last three folders of the working directory, capped at 31 characters |
-| yellow | Git branch, `*` when dirty, `⇡ n` / `⇣ n` ahead/behind its upstream |
+| peach | The repo the session works in (see below), else the last three folders of the working directory, capped at 31 characters |
+| yellow | That repo's branch, `*` when dirty, `⇡ n` / `⇣ n` ahead/behind its upstream |
 | blue | PRs this session created or acted on, as clickable [OSC 8](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) links |
 | sapphire | The Linear issue this session is about, also a link (opt-in, see below) |
 | greens | Time left and % used of the 5-hour and weekly windows, plus the Fable weekly bucket while a Fable model is selected |
 | maroon | Context used against the auto-compact window (`!` past 200k tokens), then prompt-cache health: hit ratio while warm, the tokens the next turn re-sends once it is cold |
+
+**Repo.** A session started in a multi-root workspace folder reaches its repos by path (`git -C`, `cd`, edits, worktrees), so the working directory's repo is usually the wrong one. `statusline-repo.py` scores every repo the session touches, writes more than reads, and lets older scores decay, so a one-off lookup elsewhere doesn't take the pill but moving to another repo does. It follows shell variables (`WT=...; git -C "$WT"`) and names a linked worktree after its main repo. Until the session touches a repo, the working directory's repo is shown. If your workspace folder lives inside a repo whose branch you don't want on the bar, set `CLAUDE_STATUSLINE_REPO_FALLBACK=root` in the `env` block of `settings.json`: the working directory's repo is then shown only when the directory is that repo's root.
 
 **PRs.** `statusline-prs.py` only counts PRs reached through a `gh pr` / `gh api` command or that command's output, so PRs merely quoted in a doc don't show up. It reads the transcript from where the previous run stopped, so a long session is scanned once. The last 3 are shown (`CLAUDE_STATUSLINE_PR_LIMIT`).
 
