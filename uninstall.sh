@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Uninstaller for claude-code-terminal-signals.
-#   ./uninstall.sh            # remove hooks + color wrapper, keep installed files
+#   ./uninstall.sh            # remove hooks, statusline + color wrapper, keep installed files
 #   ./uninstall.sh --purge    # also delete the install dir and color lock dir
 set -euo pipefail
 
@@ -22,7 +22,7 @@ done
 # Remove our hook entries from settings.json (leave the rest intact).
 if [ -f "$SETTINGS" ]; then
   cp "$SETTINGS" "$SETTINGS.bak.$(date +%Y%m%d%H%M%S)"
-  SETTINGS="$SETTINGS" python3 <<'PY'
+  INSTALL_DIR="$INSTALL_DIR" SETTINGS="$SETTINGS" python3 <<'PY'
 import json, os, sys
 settings = os.environ['SETTINGS']
 try:
@@ -46,11 +46,14 @@ for event, needle in (('PreToolUse', 'term-title.sh'),
         hooks[event] = kept
     elif event in hooks:
         del hooks[event]
+# only a statusLine pointing at our own script; someone else's stays
+if '%s/statusline.sh' % os.environ['INSTALL_DIR'] in ((cfg.get('statusLine') or {}).get('command') or ''):
+    del cfg['statusLine']
 with open(settings, 'w') as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
     f.write('\n')
 PY
-  echo "✓ Removed hooks from $SETTINGS"
+  echo "✓ Removed hooks and statusline from $SETTINGS"
 fi
 
 # Remove the sourced color wrapper from .zshrc.
