@@ -3,8 +3,9 @@
 # preset. Segments are drawn as rounded pills, one per
 # group, each group in its own hue family:
 #   model     mauve    -> model display name (+ effort)
-#   workspace peach    -> current directory (truncated like starship: last 3, "../")
-#             yellow   -> git branch + dirty/ahead-behind indicator (git repos only)
+#   workspace peach    -> the repo the session works in, else the current
+#                         directory (truncated like starship: last 3, "../")
+#             yellow   -> that repo's branch + dirty/ahead-behind indicator
 #   tracking  blue     -> PRs this session created or acted on, as OSC 8 hyperlinks
 #             sapphire -> the Linear issue this session is about, as an OSC 8 hyperlink
 #   usage     greens   -> 5h window, 7d window, Fable weekly bucket (Fable models only)
@@ -51,14 +52,41 @@ model_name="$(printf '%s' "$input" | jq -r '.model.display_name // empty' 2>/dev
 model_name="${model_name%% (*}"
 effort="$(printf '%s' "$input" | jq -r '.effort.level // empty' 2>/dev/null)"
 
-# --- peach: directory, last N components with "../" prefix, capped at 31 chars ---
+transcript="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
+session_id="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
+
+# --- the repo this session works in ---
+# A session started in a multi-root workspace folder reaches the real repos by
+# path, so the cwd's repo can be the wrong one. statusline-repo.py follows the
+# repos the session touches; until it has touched one, the cwd's repo is shown.
+# With CLAUDE_STATUSLINE_REPO_FALLBACK=root it is shown only when the cwd is
+# that repo's root, so a workspace folder kept inside a repo shows no branch.
+REPO_FALLBACK="${CLAUDE_STATUSLINE_REPO_FALLBACK:-any}"
+cwd="$(printf '%s' "$input" | jq -r '.workspace.current_dir // .cwd // empty' 2>/dev/null)"
+project_dir="$(printf '%s' "$input" | jq -r '.workspace.project_dir // empty' 2>/dev/null)"
+repo_dir="" repo_name=""
+if [ -n "$transcript" ] && [ -f "$transcript" ]; then
+  IFS=$'\t' read -r repo_dir repo_name <<<"$(
+    python3 "$SCRIPT_DIR/statusline-repo.py" "$transcript" "$session_id" "${project_dir:-$cwd}" 2>/dev/null | head -n 1)"
+fi
+if [ -z "$repo_dir" ] && [ -n "$cwd" ]; then
+  top="$(git -C "$cwd" --no-optional-locks rev-parse --show-toplevel 2>/dev/null)"
+  if [ -n "$top" ] && { [ "$REPO_FALLBACK" != root ] || [ "$top" -ef "$cwd" ]; }; then
+    repo_dir="$top" repo_name="${top##*/}"
+  fi
+fi
+
+# --- peach: the repo's name, or else the directory: last N components with
+# "../" prefix, capped at 31 chars ---
 # Over the cap we drop one leading component at a time, down to the rightmost
 # folder alone -- a long branch name matters more than a long path.
 DIR_MAX=31
-cwd="$(printf '%s' "$input" | jq -r '.workspace.current_dir // .cwd // empty' 2>/dev/null)"
 dir_clean_parts=()
 dir_display=""
-if [ -n "$cwd" ]; then
+if [ -n "$repo_name" ]; then
+  dir_display="$repo_name"
+  dir_clean_parts=("$repo_name")
+elif [ -n "$cwd" ]; then
   dir_display="$cwd"
   home="$HOME"
   case "$cwd" in
@@ -100,20 +128,20 @@ dir_label() {
 
 # --- yellow: git branch + dirty/ahead-behind indicator ---
 branch="" dirty="" ahead_behind=""
-if [ -n "$cwd" ] && git -C "$cwd" --no-optional-locks rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  branch="$(git -C "$cwd" --no-optional-locks symbolic-ref --short HEAD 2>/dev/null)"
+if [ -n "$repo_dir" ] && git -C "$repo_dir" --no-optional-locks rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  branch="$(git -C "$repo_dir" --no-optional-locks symbolic-ref --short HEAD 2>/dev/null)"
   if [ -z "$branch" ]; then
-    branch="$(git -C "$cwd" --no-optional-locks rev-parse --short HEAD 2>/dev/null)"
+    branch="$(git -C "$repo_dir" --no-optional-locks rev-parse --short HEAD 2>/dev/null)"
   fi
   if [ -n "$branch" ]; then
     dirty=""
-    if [ -n "$(git -C "$cwd" --no-optional-locks status --porcelain 2>/dev/null)" ]; then
+    if [ -n "$(git -C "$repo_dir" --no-optional-locks status --porcelain 2>/dev/null)" ]; then
       dirty="*"
     fi
     ahead_behind=""
-    upstream="$(git -C "$cwd" --no-optional-locks rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
+    upstream="$(git -C "$repo_dir" --no-optional-locks rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
     if [ -n "$upstream" ]; then
-      counts="$(git -C "$cwd" --no-optional-locks rev-list --left-right --count HEAD..."$upstream" 2>/dev/null)"
+      counts="$(git -C "$repo_dir" --no-optional-locks rev-list --left-right --count HEAD..."$upstream" 2>/dev/null)"
       ahead="$(echo "$counts" | awk '{print $1}')"
       behind="$(echo "$counts" | awk '{print $2}')"
       # the arrows overdraw their cell, so each gets a space before its count
@@ -127,8 +155,6 @@ fi
 # Rendered as OSC 8 hyperlinks (cmd/ctrl-click in the terminal) so the segment
 # costs a few characters instead of a full URL each.
 PR_LIMIT="${CLAUDE_STATUSLINE_PR_LIMIT:-3}"
-transcript="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
-session_id="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
 repo_slug="$(printf '%s' "$input" | jq -r '.workspace.repo | if . then .owner + "/" + .name else empty end' 2>/dev/null)"
 
 link() { printf '\033]8;;%s\a%s\033]8;;\a' "$1" "$2"; }

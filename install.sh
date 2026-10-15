@@ -45,7 +45,8 @@ cp "$REPO_DIR/hooks/term-title.sh" "$REPO_DIR/hooks/term-perm.sh" \
    "$REPO_DIR/hooks/term-defer.sh" "$INSTALL_DIR/"
 cp "$REPO_DIR/shell/claude-session-color.zsh" "$INSTALL_DIR/"
 cp "$REPO_DIR/statusline/statusline.sh" "$REPO_DIR/statusline/statusline-prs.py" \
-   "$REPO_DIR/statusline/statusline-issue.py" "$INSTALL_DIR/"
+   "$REPO_DIR/statusline/statusline-issue.py" "$REPO_DIR/statusline/statusline-repo.py" \
+   "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/term-title.sh" "$INSTALL_DIR/term-perm.sh" \
          "$INSTALL_DIR/term-busy.sh" "$INSTALL_DIR/term-agents.sh" \
          "$INSTALL_DIR/term-defer.sh" "$INSTALL_DIR/statusline.sh"
