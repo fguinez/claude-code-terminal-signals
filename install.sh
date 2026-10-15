@@ -177,5 +177,9 @@ fi
 
 echo
 echo "Done. Next steps:"
-{ [ "$DO_HOOKS" -eq 1 ] || [ "$DO_STATUSLINE" -eq 1 ]; } && echo "  • Restart Claude Code (or start a new session) so the new hooks and statusline load."
-[ "$DO_COLOR" -eq 1 ] && echo "  • Run 'source ~/.zshrc' (or open a new terminal) to enable per-session colors."
+if [ "$DO_HOOKS" -eq 1 ] || [ "$DO_STATUSLINE" -eq 1 ]; then
+  echo "  • Restart Claude Code (or start a new session) so the new hooks and statusline load."
+fi
+if [ "$DO_COLOR" -eq 1 ]; then
+  echo "  • Run 'source ~/.zshrc' (or open a new terminal) to enable per-session colors."
+fi
