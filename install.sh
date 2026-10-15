@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Installer for claude-code-terminal-signals.
 #
-#   ./install.sh                # install both features
-#   ./install.sh --no-color     # only the tab attention glyphs (hooks)
-#   ./install.sh --no-hooks     # only the per-session color wrapper (zsh)
-#   ./install.sh --dir PATH     # custom install dir (default: ~/.claude/terminal-signals)
+#   ./install.sh                       # install all three features
+#   ./install.sh --no-color            # skip the per-session color wrapper (zsh)
+#   ./install.sh --no-hooks            # skip the tab attention glyphs (hooks)
+#   ./install.sh --no-statusline       # skip the powerline statusline
+#   ./install.sh --replace-statusline  # take over a statusLine you already have
+#   ./install.sh --dir PATH            # custom install dir (default: ~/.claude/terminal-signals)
 #
 # Idempotent: safe to re-run. It backs up settings.json before editing and only
-# touches the hook entries it owns (those referencing term-title.sh/term-perm.sh).
+# touches the entries it owns (hooks referencing term-*.sh, and a statusLine
+# pointing at its own statusline.sh).
 set -euo pipefail
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,13 +20,17 @@ SETTINGS="${CLAUDE_DIR}/settings.json"
 ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
 DO_HOOKS=1
 DO_COLOR=1
+DO_STATUSLINE=1
+REPLACE_STATUSLINE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-hooks) DO_HOOKS=0 ;;
     --no-color) DO_COLOR=0 ;;
+    --no-statusline) DO_STATUSLINE=0 ;;
+    --replace-statusline) REPLACE_STATUSLINE=1 ;;
     --dir) INSTALL_DIR="$2"; shift ;;
-    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
   shift
@@ -37,16 +44,22 @@ cp "$REPO_DIR/hooks/term-title.sh" "$REPO_DIR/hooks/term-perm.sh" \
    "$REPO_DIR/hooks/term-busy.sh" "$REPO_DIR/hooks/term-agents.sh" \
    "$REPO_DIR/hooks/term-defer.sh" "$INSTALL_DIR/"
 cp "$REPO_DIR/shell/claude-session-color.zsh" "$INSTALL_DIR/"
+cp "$REPO_DIR/statusline/statusline.sh" "$REPO_DIR/statusline/statusline-prs.py" \
+   "$REPO_DIR/statusline/statusline-issue.py" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/term-title.sh" "$INSTALL_DIR/term-perm.sh" \
          "$INSTALL_DIR/term-busy.sh" "$INSTALL_DIR/term-agents.sh" \
-         "$INSTALL_DIR/term-defer.sh"
+         "$INSTALL_DIR/term-defer.sh" "$INSTALL_DIR/statusline.sh"
+
+# One backup per run, taken before any feature edits settings.json.
+if { [ "$DO_HOOKS" -eq 1 ] || [ "$DO_STATUSLINE" -eq 1 ]; } && [ -f "$SETTINGS" ]; then
+  cp "$SETTINGS" "$SETTINGS.bak.$(date +%Y%m%d%H%M%S)"
+fi
 
 # ---------------------------------------------------------------------------
 # Feature 1 — tab attention glyphs (Claude Code hooks)
 # ---------------------------------------------------------------------------
 if [ "$DO_HOOKS" -eq 1 ]; then
   mkdir -p "$CLAUDE_DIR"
-  [ -f "$SETTINGS" ] && cp "$SETTINGS" "$SETTINGS.bak.$(date +%Y%m%d%H%M%S)"
   INSTALL_DIR="$INSTALL_DIR" SETTINGS="$SETTINGS" python3 <<'PY'
 import json, os, sys
 
@@ -112,6 +125,40 @@ PY
 fi
 
 # ---------------------------------------------------------------------------
+# Feature 3 — powerline statusline
+# ---------------------------------------------------------------------------
+if [ "$DO_STATUSLINE" -eq 1 ]; then
+  command -v jq >/dev/null 2>&1 || echo "! jq not found: the statusline needs it to read Claude's payload."
+  mkdir -p "$CLAUDE_DIR"
+  INSTALL_DIR="$INSTALL_DIR" SETTINGS="$SETTINGS" REPLACE="$REPLACE_STATUSLINE" python3 <<'PY'
+import json, os, sys
+
+d = os.environ['INSTALL_DIR']
+settings = os.environ['SETTINGS']
+script = '%s/statusline.sh' % d
+
+try:
+    with open(settings) as f:
+        cfg = json.load(f)
+except FileNotFoundError:
+    cfg = {}
+except Exception:
+    sys.exit("✗ %s is not valid JSON — aborting so it isn't clobbered. Fix it and re-run." % settings)
+
+current = (cfg.get('statusLine') or {}).get('command') or ''
+if current and script not in current and os.environ['REPLACE'] != '1':
+    print("! Kept your existing statusLine (%s). Re-run with --replace-statusline to switch." % current)
+    sys.exit(0)
+
+cfg['statusLine'] = {'type': 'command', 'command': 'bash "%s"' % script}
+with open(settings, 'w') as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+    f.write('\n')
+print("✓ Set statusLine in %s" % settings)
+PY
+fi
+
+# ---------------------------------------------------------------------------
 # Feature 2 — unique bar color per session (zsh wrapper)
 # ---------------------------------------------------------------------------
 if [ "$DO_COLOR" -eq 1 ]; then
@@ -130,5 +177,5 @@ fi
 
 echo
 echo "Done. Next steps:"
-[ "$DO_HOOKS" -eq 1 ] && echo "  • Restart Claude Code (or start a new session) so the new hooks load."
+{ [ "$DO_HOOKS" -eq 1 ] || [ "$DO_STATUSLINE" -eq 1 ]; } && echo "  • Restart Claude Code (or start a new session) so the new hooks and statusline load."
 [ "$DO_COLOR" -eq 1 ] && echo "  • Run 'source ~/.zshrc' (or open a new terminal) to enable per-session colors."

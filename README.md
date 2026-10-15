@@ -2,13 +2,14 @@
 
 Tell your [Claude Code](https://claude.com/claude-code) sessions apart at a glance — straight from the terminal tab bar.
 
-Two small, independent features:
+Three small, independent features:
 
 1. **Attention glyphs** — a glyph prefix tells you what each session wants from you, alongside the **conversation name** (not the folder):
    - `✦ <name>` — Claude is asking a clarifying question (`AskUserQuestion`)
    - `✿ <name>` — Claude is waiting for you to approve a tool/permission
    - `⧗ <name>` — Claude finished replying but left work running in the background (a shell or a subagent), so it isn't your turn yet (replaces the native `✳`)
 2. **Unique bar color per session** — every new interactive `claude` session opens with a different `/color`, so tabs are visually distinct at a glance.
+3. **Powerline statusline**: one bar under the prompt with the model, folder, git branch, the PRs and Linear issue the session is working on, plan usage, and context and prompt-cache health. See [Statusline](#statusline).
 
 ## Demo
 
@@ -51,6 +52,7 @@ The `✳` "finished" mark has the mirror problem — it appears the moment Claud
 - **Claude Code** (`claude` CLI).
 - **python3** — used by the hooks (JSON parsing, process scan) and the installer.
 - **zsh** — required only for the per-session color feature. The attention-glyph hooks are shell-agnostic.
+- **jq**, a [Nerd Font](https://www.nerdfonts.com/) and a truecolor terminal, for the statusline only.
 - macOS or Linux. (The glyphs use OSC title escapes supported by iTerm2, Terminal.app, the VS Code integrated terminal, Warp, etc.)
 
 ---
@@ -70,12 +72,14 @@ Then:
 Options:
 
 ```sh
-./install.sh --no-color     # only the attention glyphs (hooks)
-./install.sh --no-hooks     # only the per-session color wrapper
-./install.sh --dir PATH     # custom install dir (default: ~/.claude/terminal-signals)
+./install.sh --no-color            # skip the per-session color wrapper
+./install.sh --no-hooks            # skip the attention glyphs (hooks)
+./install.sh --no-statusline       # skip the statusline
+./install.sh --replace-statusline  # take over a statusLine you already have
+./install.sh --dir PATH            # custom install dir (default: ~/.claude/terminal-signals)
 ```
 
-The installer is **idempotent** and **non-destructive**: it backs up `settings.json` before editing and only touches the hook entries it owns (anything referencing `term-title.sh` / `term-perm.sh` / `term-busy.sh` / `term-agents.sh`), so it won't disturb other hooks you have (e.g. [peon-ping](https://github.com/PeonPing/peon-ping)).
+The installer is **idempotent** and **non-destructive**: it backs up `settings.json` before editing and only touches the hook entries it owns (anything referencing `term-title.sh` / `term-perm.sh` / `term-busy.sh` / `term-agents.sh`), so it won't disturb other hooks you have (e.g. [peon-ping](https://github.com/PeonPing/peon-ping)). It also leaves an existing `statusLine` alone unless you pass `--replace-statusline`.
 
 ### Manual install
 
@@ -110,6 +114,11 @@ If you'd rather wire it up yourself:
 
    ```zsh
    source "/ABS/PATH/shell/claude-session-color.zsh"
+   ```
+4. For the statusline, copy the three files in `statusline/` into one folder (`statusline.sh` calls the two `.py` helpers from its own directory) and add:
+
+   ```json
+   { "statusLine": { "type": "command", "command": "bash \"/ABS/PATH/statusline.sh\"" } }
    ```
 
 ---
@@ -184,12 +193,47 @@ It passes straight through (no color) when headless (`-p`/`--print`), when there
 
 > Note: `/color` is in-memory only (Claude doesn't persist it to disk), so the color is reassigned on each launch. There's no `--color` flag; the slash-command-on-startup trick is the supported path.
 
+### Statusline
+
+`statusline/statusline.sh` draws one powerline bar in the [catppuccin frappé](https://github.com/catppuccin/catppuccin) palette, as rounded pills grouped by hue. The session's own context sits on the left and its budgets on the right:
+
+| Pill | Shows |
+| --- | --- |
+| mauve | Model and effort: `Opus 5.5 (high)` |
+| peach | The last three folders of the working directory, capped at 31 characters |
+| yellow | Git branch, `*` when dirty, `⇡ n` / `⇣ n` ahead/behind its upstream |
+| blue | PRs this session created or acted on, as clickable [OSC 8](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) links |
+| sapphire | The Linear issue this session is about, also a link (opt-in, see below) |
+| greens | Time left and % used of the 5-hour and weekly windows, plus the Fable weekly bucket while a Fable model is selected |
+| maroon | Context used against the auto-compact window (`!` past 200k tokens), then prompt-cache health: hit ratio while warm, the tokens the next turn re-sends once it is cold |
+
+**PRs.** `statusline-prs.py` only counts PRs reached through a `gh pr` / `gh api` command or that command's output, so PRs merely quoted in a doc don't show up. It reads the transcript from where the previous run stopped, so a long session is scanned once. The last 3 are shown (`CLAUDE_STATUSLINE_PR_LIMIT`).
+
+**Linear issue.** `statusline-issue.py` scores every issue key it finds by where it appears: your first prompt, skill arguments and writes to Linear weigh most, the model's own prose least. Text the harness injects (memory, skill bodies, subagent reports) doesn't count, and neither do placeholder numbers like `-123` or `-1234`. The current branch name adds weight too. The top score wins once it clears a threshold. The segment is off until you tell it your workspace, for example in the `env` block of `settings.json`:
+
+```json
+{
+  "env": {
+    "CLAUDE_STATUSLINE_LINEAR_WORKSPACE": "acme",
+    "CLAUDE_STATUSLINE_LINEAR_TEAMS": "ENG OPS DES"
+  }
+}
+```
+
+`CLAUDE_STATUSLINE_LINEAR_WORKSPACE` is the slug in `linear.app/<slug>/…`. `CLAUDE_STATUSLINE_LINEAR_TEAMS` lists your team keys, so `UTF-8` or `INC-42` aren't taken for issues.
+
+**Plan usage.** `rate_limits` is missing from the payload before the first API response, so the last values seen are cached and shown until fresh ones arrive. A window is dropped once its reset time passes. The Fable bucket never reaches the payload at all; it is read from Claude Code's own cache in `~/.claude.json` and hidden once that copy is more than 6 hours old.
+
+**Fitting the width.** Claude Code passes the terminal width as `$COLUMNS`. When the bar doesn't fit, it is redrawn at up to 14 levels of compaction, each keeping the previous ones' savings: PR repo names go first, then folders, coarser day counts, abbreviated effort, a capped branch name, fewer PRs, merged pills, and finally whole segments. `CLAUDE_STATUSLINE_MARGIN` (default 4) sets the columns kept free.
+
+Caches live in `~/.claude/statusline-cache/` (or under `$CLAUDE_CONFIG_DIR`); a session's cache is pruned after a month untouched.
+
 ---
 
 ## Uninstall
 
 ```sh
-./uninstall.sh            # remove hooks + color wrapper (keeps installed files)
+./uninstall.sh            # remove hooks, statusline + color wrapper (keeps installed files)
 ./uninstall.sh --purge    # also delete the install dir and color lock dir
 ```
 
@@ -202,6 +246,7 @@ It passes straight through (no color) when headless (`-p`/`--print`), when there
 - **Subagent liveness timeouts:** `LIVENESS` (15 min of transcript silence) and `TTL` (4 h) in `term-busy.sh`. Raise `LIVENESS` if you run agents that sit in single long tool calls and you'd rather keep the `⧗`.
 - **Color palette / count:** edit the `colors=(...)` array in `claude-session-color.zsh`. Only the colors Claude's `/color` accepts are valid: `red, blue, green, yellow, purple, orange, pink, cyan, default` (`magenta` is **not** valid).
 - **Title length:** the hook caps the name at 60 chars; tweak in `term-title.sh`.
+- **Statusline colors and segments:** the palette is the `R;G;B` block at the top of `statusline.sh`. Each segment is one `add_seg` call in `compose()`, and the compaction order is the comment above `FIT_MAX_LEVEL`.
 
 ---
 
