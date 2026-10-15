@@ -226,7 +226,7 @@ It passes straight through (no color) when headless (`-p`/`--print`), when there
 
 **Plan usage.** `rate_limits` is missing from the payload before the first API response, so the last values seen are cached and shown until fresh ones arrive. A window is dropped once its reset time passes. The Fable bucket never reaches the payload at all; it is read from Claude Code's own cache in `~/.claude.json` and hidden once that copy is more than 6 hours old.
 
-**Fitting the width.** Claude Code passes the terminal width as `$COLUMNS`. When the bar doesn't fit, it is redrawn at up to 14 levels of compaction, each keeping the previous ones' savings: PR repo names go first, then folders, coarser day counts, abbreviated effort, a capped branch name, fewer PRs, merged pills, and finally whole segments. `CLAUDE_STATUSLINE_MARGIN` (default 4) sets the columns kept free.
+**Fitting the width.** Claude Code passes the terminal width as `$COLUMNS`. When the bar doesn't fit, it is redrawn at up to 14 levels of compaction, each keeping the previous ones' savings: PR repo names go first, then folders, coarser day counts, abbreviated effort, a capped branch name, fewer PRs, merged pills, and finally whole segments. Among those, a repo name outlasts the PR links, which outlast a plain path. `CLAUDE_STATUSLINE_MARGIN` (default 4) sets the columns kept free.
 
 Caches live in `~/.claude/statusline-cache/` (or under `$CLAUDE_CONFIG_DIR`); a session's cache is pruned after a month untouched.
 
