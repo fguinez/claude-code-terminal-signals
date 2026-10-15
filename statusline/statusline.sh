@@ -357,7 +357,11 @@ fi
 #   6 branch name capped at 20    12 Linear issue dropped
 #                                 13 both halves in one pill
 #                                 14 cw cache health dropped
+# When the dir pill names a repo, 9 and 10 swap: a repo name tells more than
+# the PR links, a path less.
 FIT_MAX_LEVEL=14
+DIR_DROP_LEVEL=9 PR_DROP_LEVEL=10
+[ -n "$repo_name" ] && DIR_DROP_LEVEL=10 PR_DROP_LEVEL=9
 # Claude Code pads the line 2 columns on the left and clips it ~3 short of
 # $COLUMNS; 4 leaves the same 2-column gap on the right
 STATUSLINE_MARGIN="${CLAUDE_STATUSLINE_MARGIN:-4}"
@@ -398,7 +402,7 @@ compose() {
   fi
 
   cur_group=$G_WORKSPACE
-  if [ -n "$cwd" ] && [ "$lvl" -lt 9 ]; then
+  if [ -n "$dir_display" ] && [ "$lvl" -lt "$DIR_DROP_LEVEL" ]; then
     local folders=3
     [ "$lvl" -ge 2 ] && folders=2
     [ "$lvl" -ge 3 ] && folders=1
@@ -417,7 +421,7 @@ compose() {
   fi
 
   cur_group=$G_TRACKING
-  if [ "${#pr_nums[@]}" -gt 0 ] && [ "$lvl" -lt 10 ]; then
+  if [ "${#pr_nums[@]}" -gt 0 ] && [ "$lvl" -lt "$PR_DROP_LEVEL" ]; then
     local with_repo=1 max="${#pr_nums[@]}"
     [ "$lvl" -ge 1 ] && with_repo=0
     [ "$lvl" -ge 7 ] && max=1
