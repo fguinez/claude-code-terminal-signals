@@ -16,15 +16,15 @@ Three small, independent features:
 
 ## Demo
 
-![Five Claude Code terminal tabs, each in a different session color, each prefixed by a state glyph: ⠋ working, ✳ finished, ⧗ background work still running, ✦ clarifying question, ✿ permission prompt — with the conversation name as the label](docs/tab-states.svg)
+![Six Claude Code terminal tabs, each in a different session color, each prefixed by a state glyph: ⠋ working, ✳ finished, ⧗ background work still running, ◎ only orphaned subagent shells left running, ✦ clarifying question, ✿ permission prompt — with the conversation name as the label](docs/tab-states.svg)
 
-*Two sessions need you (`✦`, `✿`) and three don't (`⠋`, `✳`, `⧗`) — and each is a different color. You can tell which is which without opening any of them.*
+*Two sessions need you (`✦`, `✿`) and four don't (`⠋`, `✳`, `⧗`, `◎`) — and each is a different color. You can tell which is which without opening any of them.*
 
 > Mockup illustrating the states. To drop in a real recording, save a GIF/PNG to `docs/` and point this `![...]()` at it.
 
 ### Tab states at a glance
 
-By default, Claude Code already labels the tab with the conversation's AI-generated title and animates a working/idle indicator — so you can tell sessions apart by *what they're about*, not just by folder. This repo adds the two states where Claude is **blocked on you**, plus one where the native indicator would mislead you:
+By default, Claude Code already labels the tab with the conversation's AI-generated title and animates a working/idle indicator — so you can tell sessions apart by *what they're about*, not just by folder. This repo adds the two states where Claude is **blocked on you**, plus two where the native indicator would mislead you:
 
 | Prefix | State | Source |
 | --- | --- | --- |
@@ -35,9 +35,9 @@ By default, Claude Code already labels the tab with the conversation's AI-genera
 | `✦` | Asking a clarifying question (`AskUserQuestion`) | **this repo** |
 | `✿` | Waiting for you to approve a permission | **this repo** |
 
-All five show alongside the **conversation name**. `✦` and `✿` are emitted as an **OSC 0** title escape returned from a hook (`{"terminalSequence":"]0;…"}`). They fire mid-turn, while Claude is blocked on you and not retitling, so the glyph sticks.
+All six show alongside the **conversation name**. `✦` and `✿` are emitted as an **OSC 0** title escape returned from a hook (`{"terminalSequence":"]0;…"}`). They fire mid-turn, while Claude is blocked on you and not retitling, so the glyph sticks.
 
-`⧗` can't work that way. It fires on `Stop`, and Claude Code writes its own `✳` title *after* it processes hook output — so a title returned from a `Stop` hook is emitted and then immediately overwritten. Instead `term-busy.sh` writes nothing to stdout and hands off to `term-defer.sh`, a detached helper that waits for Claude to report the turn finished (its `status` in `<config>/sessions/<pid>.json` stops reading `busy`, ~120 ms after the hook runs), lets the native title land, and only then writes the glyph to the tty that owns the tab. That wait doubles as the check for whether the `⧗` is still warranted — the same `status` says whether a background shell is running. If the turn has resumed by then it writes nothing, so a stale `⧗` can never sit on a working session.
+`⧗` and `◎` can't work that way. They fire on `Stop`, and Claude Code writes its own `✳` title *after* it processes hook output — so a title returned from a `Stop` hook is emitted and then immediately overwritten. Instead `term-busy.sh` writes nothing to stdout and hands off to `term-defer.sh`, a detached helper that waits for Claude to report the turn finished (its `status` in `<config>/sessions/<pid>.json` stops reading `busy`, ~120 ms after the hook runs), lets the native title land, and only then writes the glyph to the tty that owns the tab. That wait doubles as the check for whether the `⧗` is still warranted — the same `status` says whether a background shell is running. If the turn has resumed by then it writes nothing, so a stale `⧗` can never sit on a working session.
 
 The working (moving dot) and finished (`✳`) indicators are Claude Code's built-in tab status, set through its **own** title mechanism (process-level / OSC 2) — a different path than the hook's, which is why they coexist, and why a hook glyph gives way as soon as Claude writes its next native title. Those native glyphs aren't officially documented and may vary by version/terminal; they're listed here only so the full vocabulary lives in one place. The per-session color (feature 2) is independent of all of these.
 
@@ -54,7 +54,7 @@ The `✳` "finished" mark has the mirror problem — it appears the moment Claud
 ## Requirements
 
 - **Claude Code** v2.1.141+ (`claude` CLI) — the attention glyphs rely on the `terminalSequence` hook output, which older versions don't emit.
-- **python3** — used by the hooks (JSON parsing, process scan) and the installer.
+- **python3** — used by the hooks (JSON parsing, process scan), the statusline helpers, and the installer and uninstaller.
 - **zsh** — required only for the per-session color feature. The attention-glyph hooks are shell-agnostic.
 - **jq**, a [Nerd Font](https://www.nerdfonts.com/) and a truecolor terminal, for the statusline only.
 - macOS or Linux. (The glyphs use OSC title escapes supported by standalone terminals like iTerm2, Terminal.app, Ghostty, Warp, etc. The VS Code / Cursor integrated terminal needs one extra setting — see [Cursor / VS Code integrated terminal](#cursor--vs-code-integrated-terminal).)
@@ -134,7 +134,7 @@ If you'd rather wire it up yourself:
    ```zsh
    source "/ABS/PATH/shell/claude-session-color.zsh"
    ```
-5. For the statusline, copy the three files in `statusline/` into one folder (`statusline.sh` calls the two `.py` helpers from its own directory) and add:
+5. For the statusline, copy the four files in `statusline/` into one folder (`statusline.sh` calls the three `.py` helpers from its own directory) and add:
 
    ```json
    { "statusLine": { "type": "command", "command": "bash \"/ABS/PATH/statusline.sh\"" } }
@@ -150,13 +150,13 @@ Claude Code lets a hook return a `terminalSequence` that it writes to the termin
 
 - **`AskUserQuestion` (PreToolUse)** → `term-title.sh` emits `✦ <name>`.
 - **`PermissionRequest`** → `term-perm.sh` picks the glyph (`✦` for an `AskUserQuestion`, `✿` for a real permission prompt) and hands off to `term-title.sh`.
-- **`Stop`** → `term-busy.sh` emits `⧗ <name>`, but **only** if background work is still running (see below). Otherwise it stays silent, so Claude's native `✳` stands.
+- **`Stop`** → `term-busy.sh` (through `term-defer.sh`) writes `⧗ <name>`, or `◎ <name>` when the only work left is shells orphaned by finished subagents, but **only** if background work is still running (see below). Otherwise it stays silent, so Claude's native `✳` stands.
 
 `<name>` is resolved the same way Claude names the tab natively, in priority order:
 
 1. A manual `/rename` (stored in `~/.claude/sessions/<pid>.json`).
 2. The AI-generated conversation title (`{"type":"ai-title",...}` entries in the session transcript), located via `transcript_path` or by `session_id`.
-3. The working directory's folder name (last-resort fallback).
+3. The working directory's folder name (last-resort fallback). If the payload carries neither `cwd` nor `workspace_roots`, `$CLAUDE_TITLE` is used, then the folder the hook runs in.
 
 This is the key fix over a naive title hook: questions/permissions show the **conversation name**, not the folder.
 
@@ -206,8 +206,10 @@ Both payloads carry the **main** session's `session_id` — not the subagent's �
 
 A marker is state, and state drifts: an interrupt or a crash could leave one behind, and a `⧗` that never clears is worse than the `✳` it replaced. So a marker only counts while its subagent still looks alive. Every subagent keeps its own transcript at `<projects>/<session_id>/subagents/agent-<agent_id>.jsonl` and appends to it while it works, so:
 
-- transcript quiet for **15 min** → treat the agent as gone (marker kept, in case it wakes up);
-- no transcript found at all → the marker expires after **4 h**, then gets pruned.
+- transcript quiet for **15 min** → treat the agent as gone (marker kept until it is 4 h old, in case it wakes up);
+- no transcript found at all → the marker expires after **4 h**.
+
+A marker that no longer counts is deleted once it is 4 h old.
 
 Both timeouts fail toward the native `✳`, never toward a stuck `⧗`. To wipe the slate by hand: `rm -rf ~/.claude/terminal-signals/agents`.
 
@@ -219,7 +221,7 @@ Sound hooks such as [peon-ping](https://github.com/PeonPing/peon-ping) play thei
 sh "/ABS/PATH/term-done.sh" <your hook command>
 ```
 
-It applies the same two checks as `⧗`: it waits for the session `status` to settle, skips the hook while it reads `shell`, and skips it while a subagent marker is alive. Only `Stop` and the `idle_prompt` notification (which peon-ping also maps to its done sound) are gated; every other event, and any session whose state file can't be found, goes straight through. The hook payload is forwarded on stdin, so the wrapped hook sees exactly what it would have. Keep the entry `async`: the wait for `status` costs the turn nothing that way.
+It applies the same two checks as `⧗`: it waits for the session `status` to settle, skips the hook while it reads `shell`, and skips it while a subagent marker is alive. Only `Stop` and the `idle_prompt` notification (which peon-ping also maps to its done sound) are gated; every other event, and any session whose state file can't be found, goes straight through. The hook payload is forwarded on stdin, so the wrapped hook sees exactly what it would have. Keep the entry `async`: the wait for `status` costs the turn nothing that way. That wait is shared with `term-defer.sh`: `TERM_DEFER_WAIT` (default 6 s) bounds how long either waits for the turn to stop reading `busy`, and `TERM_DEFER_CUSHION` (default 0.4 s) is the pause after that for the native title to land.
 
 When the background work finishes, Claude Code picks the session back up, and the turn that really ends it plays the sound.
 
@@ -247,13 +249,15 @@ It passes straight through (no color) when headless (`-p`/`--print`), when there
 | blue | PRs this session created or acted on, as clickable [OSC 8](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) links |
 | sapphire | The Linear issue this session is about, also a link (opt-in, see below) |
 | greens | Time left and % used of the 5-hour and weekly windows, plus the Fable weekly bucket while a Fable model is selected |
-| maroon | Context used against the auto-compact window (`!` past 200k tokens), then prompt-cache health: hit ratio while warm, the tokens the next turn re-sends once it is cold |
+| maroon | Context used against the auto-compact window (`!` past 200k tokens; see below), then prompt-cache health: hit ratio while warm, the tokens the next turn re-sends once it is cold |
+
+**Context.** The window is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` if set, else `autoCompactWindow` in `settings.json`, else the model's full `context_window_size` from the payload.
 
 **Repo.** A session started in a multi-root workspace folder reaches its repos by path (`git -C`, `cd`, edits, worktrees), so the working directory's repo is usually the wrong one. `statusline-repo.py` scores every repo the session touches, writes more than reads, and lets older scores decay, so a one-off lookup elsewhere doesn't take the pill but moving to another repo does. It follows shell variables (`WT=...; git -C "$WT"`) and names a linked worktree after its main repo. Until the session touches a repo, the working directory's repo is shown. If your workspace folder lives inside a repo whose branch you don't want on the bar, set `CLAUDE_STATUSLINE_REPO_FALLBACK=root` in the `env` block of `settings.json`: the working directory's repo is then shown only when the directory is that repo's root.
 
 **PRs.** `statusline-prs.py` only counts PRs reached through a `gh pr` / `gh api` command or that command's output, so PRs merely quoted in a doc don't show up. It reads the transcript from where the previous run stopped, so a long session is scanned once. The last 3 are shown (`CLAUDE_STATUSLINE_PR_LIMIT`).
 
-**Linear issue.** `statusline-issue.py` scores every issue key it finds by where it appears: your first prompt, skill arguments and writes to Linear weigh most, the model's own prose least. Text the harness injects (memory, skill bodies, subagent reports) doesn't count, and neither do placeholder numbers like `-123` or `-1234`. The current branch name adds weight too. The top score wins once it clears a threshold. The segment is off until you tell it your workspace, for example in the `env` block of `settings.json`:
+**Linear issue.** `statusline-issue.py` scores every issue key it finds by where it appears: your first prompt, skill arguments and writes to Linear weigh most, the model's own prose least. Text the harness injects (memory, skill bodies, subagent reports) doesn't count, and neither do placeholder numbers like `-123` or `-1234`. The current branch name adds weight too. The top score wins once it clears a threshold. The segment is off until you set both your workspace and your team keys, for example in the `env` block of `settings.json`:
 
 ```json
 {
@@ -264,7 +268,7 @@ It passes straight through (no color) when headless (`-p`/`--print`), when there
 }
 ```
 
-`CLAUDE_STATUSLINE_LINEAR_WORKSPACE` is the slug in `linear.app/<slug>/…`. `CLAUDE_STATUSLINE_LINEAR_TEAMS` lists your team keys, so `UTF-8` or `INC-42` aren't taken for issues.
+`CLAUDE_STATUSLINE_LINEAR_WORKSPACE` is the slug in `linear.app/<slug>/…`. `CLAUDE_STATUSLINE_LINEAR_TEAMS` lists your team keys and is required too: only keys with those prefixes match, so `UTF-8` or `INC-42` aren't taken for issues.
 
 **Plan usage.** `rate_limits` is missing from the payload before the first API response, so the last values seen are cached and shown until fresh ones arrive. A window is dropped once its reset time passes. The Fable bucket never reaches the payload at all; it is read from Claude Code's own cache in `~/.claude.json` and hidden once that copy is more than 6 hours old.
 
@@ -279,15 +283,18 @@ Caches live in `~/.claude/statusline-cache/` (or under `$CLAUDE_CONFIG_DIR`); a 
 ```sh
 ./uninstall.sh            # remove hooks, statusline + color wrapper (keeps installed files)
 ./uninstall.sh --purge    # also delete the install dir and color lock dir
+./uninstall.sh --dir PATH # if you installed with --dir
 ```
+
+Pass the same `--dir` you installed with: the statusline entry and `--purge` are matched against that folder.
 
 ---
 
 ## Customizing
 
 - **Glyphs:** edit the `✦`/`✿` characters in `term-perm.sh` (and the `"✦"` argument in your `settings.json` `PreToolUse` entry). Any single grapheme works. For `⧗`, either edit the default in `term-busy.sh` or set `TERM_BUSY_GLYPH` in its `settings.json` entry: `env TERM_BUSY_GLYPH=⏳ sh "/ABS/PATH/term-busy.sh"`. `◎` works the same way through `TERM_ORPHAN_GLYPH`.
-- **Debugging the `Stop` hook:** it's invisible by design when there's nothing to report. `touch ~/.claude/terminal-signals.debug` and every turn end appends what it saw — owning pid, live shell pids, live agent ids — to `~/.claude/terminal-signals.log`, plus the deferred writer's decision (`defer owner=… status=… orphans=… wrote=…`) and a `done run|skip …` line from `term-done.sh`. Delete the marker to stop.
-- **Subagent liveness timeouts:** `LIVENESS` (15 min of transcript silence) and `TTL` (4 h) in `term-busy.sh`. Raise `LIVENESS` if you run agents that sit in single long tool calls and you'd rather keep the `⧗`.
+- **Debugging the `Stop` hook:** it's invisible by design when there's nothing to report. `touch ~/.claude/terminal-signals.debug` and every turn end appends what it saw — owning pid, live shell pids, live agent ids — to `~/.claude/terminal-signals.log`, plus the deferred writer's decision (`defer owner=… status=… agents=… shells=… orphans=… wrote=…`) and a `done run|skip …` line from `term-done.sh`. Delete the marker to stop.
+- **Subagent liveness timeouts:** `LIVENESS` (15 min of transcript silence) and `TTL` (4 h), set in both `term-busy.sh` and `term-done.sh`; change them together. Raise `LIVENESS` if you run agents that sit in single long tool calls and you'd rather keep the `⧗`.
 - **Color palette / count:** edit the `colors=(...)` array in `claude-session-color.zsh`. Only the colors Claude's `/color` accepts are valid: `red, blue, green, yellow, purple, orange, pink, cyan, default` (`magenta` is **not** valid).
 - **Title length:** the hook caps the name at 60 chars; tweak in `term-title.sh`.
 - **Statusline colors and segments:** the palette is the `R;G;B` block at the top of `statusline.sh`. Each segment is one `add_seg` call in `compose()`, and the compaction order is the comment above `FIT_MAX_LEVEL`.
