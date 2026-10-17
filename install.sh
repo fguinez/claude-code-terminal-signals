@@ -10,7 +10,8 @@
 #
 # Idempotent: safe to re-run. It backs up settings.json before editing and only
 # touches the entries it owns (hooks referencing term-*.sh, and a statusLine
-# pointing at its own statusline.sh).
+# pointing at its own statusline.sh). peon-ping's Stop/Notification hooks are
+# wrapped in term-done.sh so its done sound only plays on a real ✳.
 set -euo pipefail
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,7 +31,7 @@ while [ $# -gt 0 ]; do
     --no-statusline) DO_STATUSLINE=0 ;;
     --replace-statusline) REPLACE_STATUSLINE=1 ;;
     --dir) INSTALL_DIR="$2"; shift ;;
-    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
   shift
@@ -42,14 +43,15 @@ echo "→ Installing to: $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 cp "$REPO_DIR/hooks/term-title.sh" "$REPO_DIR/hooks/term-perm.sh" \
    "$REPO_DIR/hooks/term-busy.sh" "$REPO_DIR/hooks/term-agents.sh" \
-   "$REPO_DIR/hooks/term-defer.sh" "$INSTALL_DIR/"
+   "$REPO_DIR/hooks/term-defer.sh" "$REPO_DIR/hooks/term-done.sh" "$INSTALL_DIR/"
 cp "$REPO_DIR/shell/claude-session-color.zsh" "$INSTALL_DIR/"
 cp "$REPO_DIR/statusline/statusline.sh" "$REPO_DIR/statusline/statusline-prs.py" \
    "$REPO_DIR/statusline/statusline-issue.py" "$REPO_DIR/statusline/statusline-repo.py" \
    "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/term-title.sh" "$INSTALL_DIR/term-perm.sh" \
          "$INSTALL_DIR/term-busy.sh" "$INSTALL_DIR/term-agents.sh" \
-         "$INSTALL_DIR/term-defer.sh" "$INSTALL_DIR/statusline.sh"
+         "$INSTALL_DIR/term-defer.sh" "$INSTALL_DIR/term-done.sh" \
+         "$INSTALL_DIR/statusline.sh"
 
 # One backup per run, taken before any feature edits settings.json.
 if { [ "$DO_HOOKS" -eq 1 ] || [ "$DO_STATUSLINE" -eq 1 ]; } && [ -f "$SETTINGS" ]; then
@@ -70,6 +72,7 @@ title_cmd = 'sh "%s/term-title.sh" "✦"' % d   # ✦ for clarifying questions
 perm_cmd  = 'sh "%s/term-perm.sh"' % d             # ✦ question / ✿ permission
 busy_cmd  = 'sh "%s/term-busy.sh"' % d             # ⧗ turn ended, background work still running
 agent_cmd = 'sh "%s/term-agents.sh"' % d           # tracks background subagents for term-busy.sh
+done_cmd  = 'sh "%s/term-done.sh" ' % d            # prefix: runs a "finished" sound only on a real ✳
 
 try:
     with open(settings) as f:
@@ -118,10 +121,27 @@ for event in ('SubagentStart', 'SubagentStop'):
         'hooks': [{'type': 'command', 'command': agent_cmd}],
     })
 
+# peon-ping plays its "done" sound on every Stop, even when the turn ended waiting
+# on background work. Route it through term-done.sh so it only plays on a real ✳.
+gated = 0
+for event in ('Stop', 'Notification'):
+    for g in hooks.get(event, []):
+        for h in g.get('hooks', []):
+            cmd = (h.get('command') or '').strip()
+            if '/term-done.sh" ' in cmd:         # already gated, maybe from another --dir
+                cmd = cmd.split('/term-done.sh" ', 1)[1]
+            if cmd.endswith('peon.sh') and ' ' not in cmd:
+                h['command'] = done_cmd + cmd
+                h['timeout'] = max(int(h.get('timeout') or 0), 15)
+                h['async'] = True   # a blocking Stop hook keeps status "busy" for the whole wait
+                gated += 1
+
 with open(settings, 'w') as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
     f.write('\n')
 print("✓ Registered hooks in %s" % settings)
+if gated:
+    print("✓ Gated %d peon-ping hook(s) behind term-done.sh" % gated)
 PY
 fi
 
