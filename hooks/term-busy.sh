@@ -39,7 +39,7 @@ MAX_HOPS = 16
 #     eval '<command>' < /dev/null && pwd -P >| /tmp/claude-<hash>-cwd
 SIGNATURE = ('shell-snapshots/snapshot-', '< /dev/null', 'pwd -P >|')
 # These hooks reach the same shell; never count them as work still running.
-OURS = ('term-title.sh', 'term-perm.sh', 'term-busy.sh', 'term-agents.sh')
+OURS = ('term-title.sh', 'term-perm.sh', 'term-busy.sh', 'term-agents.sh', 'term-done.sh')
 # A live subagent appends to its own transcript constantly. If that file has gone
 # quiet, treat the agent as gone even if its marker survived (a missed
 # SubagentStop, an interrupt) — erring toward the native ✳ rather than a ⧗ that
@@ -196,6 +196,8 @@ case "$tty" in ''|'??'|'?') exit 0 ;; esac
 # is only a fallback for when the state file can't be read.
 TERM_DEFER_AGENTS=$([ "$agents" -gt 0 ] && echo 1 || echo 0) \
 TERM_DEFER_SHELLS=$([ "$shells" -gt 0 ] && echo 1 || echo 0) \
+TERM_DEFER_ORPHAN_GLYPH="${TERM_ORPHAN_GLYPH:-◎}" TERM_DEFER_TITLE="$DIR/term-title.sh" \
+TERM_SIGNALS_PAYLOAD="$payload" \
   nohup sh "$DIR/term-defer.sh" "/dev/$tty" "$CONFIG/sessions/$owner.json" "$seq" \
   >/dev/null 2>&1 &
 exit 0

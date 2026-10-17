@@ -25,11 +25,15 @@
 # TERM_DEFER_SHELLS=1 (term-busy.sh's process scan) only decides when the state
 # file can't be read at all.
 #
+# Shells left behind by subagents that have already finished also keep the status
+# at "shell", often for good (a dev server). When those are the only work left the
+# tab gets TERM_DEFER_ORPHAN_GLYPH (◎) instead of ⧗; term-done.sh stays silent.
+#
 # Usage: term-defer.sh <tty path> <session json> <escape sequence>
 [ $# -eq 3 ] || exit 0
 
 TERM_DEFER_TTY="$1" TERM_DEFER_SESSION="$2" TERM_DEFER_SEQ="$3" python3 <<'PY' 2>/dev/null
-import json, os, time
+import glob, json, os, re, shlex, subprocess, time
 
 tty = os.environ['TERM_DEFER_TTY']
 session = os.environ['TERM_DEFER_SESSION']
@@ -77,12 +81,136 @@ if seen_status and st == 'busy':
 st = st if st is not None else settled
 work = agents or (st == 'shell' if seen_status else shells)
 
-# Mirrors term-busy.sh's trace: `touch ~/.claude/terminal-signals.debug`.
 config = os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.claude')
+# term-busy.sh's tool-shell signature, minus `< /dev/null`: Claude Code drops that
+# redirect when the command has a heredoc, and such a shell must still count.
+SIGNATURE = ('shell-snapshots/snapshot-', 'pwd -P >|')
+OURS = ('term-title.sh', 'term-perm.sh', 'term-busy.sh', 'term-agents.sh', 'term-done.sh')
+
+
+def eval_command(cmd):
+    """The command a tool shell runs: the `eval '<command>'` part of its argv."""
+    start = cmd.find("eval '")
+    end = cmd.rfind(' && pwd -P >|')
+    if start < 0 or end < start:
+        return None
+    quoted = cmd[start + 5:end]
+    if quoted.endswith(' < /dev/null'):
+        quoted = quoted[:-len(' < /dev/null')]
+    # macOS `ps` prints control characters inside argv as octal text (\012).
+    quoted = re.sub(r'\\([0-3][0-7]{2})', lambda m: chr(int(m.group(1), 8)), quoted)
+    try:
+        return ''.join(shlex.split(quoted))
+    except ValueError:
+        return None
+
+
+def bash_commands(path, background_only):
+    """Bash commands the transcript at `path` ran (only run_in_background ones if asked)."""
+    marker = '"run_in_background":true' if background_only else '"name":"Bash"'
+    found = set()
+    try:
+        with open(path) as fh:
+            for line in fh:
+                if marker not in line:
+                    continue
+                try:
+                    content = json.loads(line).get('message', {}).get('content')
+                except Exception:
+                    continue
+                for item in content if isinstance(content, list) else []:
+                    inp = item.get('input') or {}
+                    if (item.get('type') == 'tool_use' and item.get('name') == 'Bash'
+                            and inp.get('command')
+                            and (inp.get('run_in_background') or not background_only)):
+                        found.add(inp['command'])
+    except OSError:
+        pass
+    return found
+
+
+def only_orphans():
+    """True when every live tool shell was started by a subagent that has finished.
+
+    Shells are matched by argv against each finished subagent's background
+    commands (finished: its term-agents.sh marker is gone); one the main agent
+    ran, or one that can't be attributed, still counts as real work.
+    """
+    try:
+        data = json.loads(os.environ.get('TERM_SIGNALS_PAYLOAD') or '{}')
+    except Exception:
+        return False
+    sid = data.get('session_id') or ''
+    transcript = data.get('transcript_path') or ''
+    owner = os.path.basename(session)[:-len('.json')]
+    if not (sid and owner.isdigit()):
+        return False
+    out = subprocess.run(['ps', '-eww', '-o', 'pid=,ppid=,command='],
+                         capture_output=True, text=True).stdout
+    parents = {}
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) >= 2:
+            parents[parts[0]] = parts[1]
+    # Never count the shell this script descends from, as term-busy.sh does.
+    chain, pid = set(), str(os.getpid())
+    while pid in parents and pid not in chain:
+        chain.add(pid)
+        pid = parents[pid]
+    live = []
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if (len(parts) == 3 and parts[1] == owner and parts[0] not in chain
+                and all(s in parts[2] for s in SIGNATURE)
+                and not any(o in parts[2] for o in OURS)):
+            live.append(eval_command(parts[2]))
+    if not live or None in live:
+        return False
+    try:
+        running = set(os.listdir(os.path.join(config, 'terminal-signals', 'agents', sid)))
+    except OSError:
+        running = set()
+    roots = glob.glob(os.path.join(config, 'projects', '*', glob.escape(sid), 'subagents'))
+    if transcript:
+        roots.append(os.path.join(os.path.dirname(transcript), sid, 'subagents'))
+    orphaned = set()
+    for path in {p for r in roots
+                 for p in glob.glob(os.path.join(glob.escape(r), '**', 'agent-*.jsonl'),
+                                    recursive=True)}:
+        if os.path.basename(path)[len('agent-'):-len('.jsonl')] not in running:
+            orphaned |= bash_commands(path, True)
+    mine = bash_commands(transcript, False) if transcript else set()
+    return all(c in orphaned and c not in mine for c in live)
+
+
+def orphan_title():
+    """term-title.sh's sequence with the orphan glyph, for the same payload."""
+    return subprocess.run(
+        ['sh', os.environ.get('TERM_DEFER_TITLE') or '',
+         os.environ.get('TERM_DEFER_ORPHAN_GLYPH') or '◎'],
+        env=dict(os.environ, TERM_TITLE_RAW='1',
+                 TERM_TITLE_PAYLOAD=os.environ.get('TERM_SIGNALS_PAYLOAD') or ''),
+        capture_output=True, text=True).stdout
+
+
+orphans = False
+if work and not agents and st == 'shell':
+    try:
+        orphan_seq = only_orphans() and orphan_title()
+    except Exception:
+        orphan_seq = ''   # attribution is best effort; never lose the ⧗ over it
+    # Attribution reads whole transcripts; the turn may have resumed meanwhile.
+    if status() not in ('shell', None):
+        raise SystemExit(0)
+    if orphan_seq:
+        orphans, seq = True, orphan_seq
+
+# Mirrors term-busy.sh's trace: `touch ~/.claude/terminal-signals.debug`.
 if os.path.exists(os.path.join(config, 'terminal-signals.debug')):
     with open(os.path.join(config, 'terminal-signals.log'), 'a') as fh:
-        fh.write('defer status=%s agents=%s shells=%s wrote=%s\n'
-                 % (st, agents, shells, work))
+        fh.write('defer owner=%s status=%s agents=%s shells=%s orphans=%s wrote=%s\n'
+                 % (os.path.basename(session)[:-len('.json')], st, agents, shells,
+                    orphans, work))
 
 if not work:
     raise SystemExit(0)

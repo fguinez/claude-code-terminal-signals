@@ -8,6 +8,7 @@ Three small, independent features:
    - `✦ <name>` — Claude is asking a clarifying question (`AskUserQuestion`)
    - `✿ <name>` — Claude is waiting for you to approve a tool/permission
    - `⧗ <name>` — Claude finished replying but left work running in the background (a shell or a subagent), so it isn't your turn yet (replaces the native `✳`)
+   - `◎ <name>` — Claude is finished, but a shell left behind by a subagent that already ended is still running (a dev server, a forgotten `sleep`); kill it from `/tasks` when you're done with it
 
    The same check gates "finished" sounds: with [peon-ping](https://github.com/PeonPing/peon-ping), the done sound plays only when the tab really reads `✳`. See [Sound hooks](#sound-hooks).
 2. **Unique bar color per session** — every new interactive `claude` session opens with a different `/color`, so tabs are visually distinct at a glance.
@@ -30,6 +31,7 @@ By default, Claude Code already labels the tab with the conversation's AI-genera
 | `⠋` — moving braille dot (animated) | Working / generating | Claude Code (built-in) |
 | `✳` | Finished — idle, waiting for your next message | Claude Code (built-in) |
 | `⧗` | Finished replying, but background work is still running | **this repo** |
+| `◎` | Finished; only shells orphaned by finished subagents are still running | **this repo** |
 | `✦` | Asking a clarifying question (`AskUserQuestion`) | **this repo** |
 | `✿` | Waiting for you to approve a permission | **this repo** |
 
@@ -172,6 +174,17 @@ The walk needs to recognize the owning `claude`, and its `argv` is not dependabl
 
 Both layers fail quiet: if the process layout changes *and* the state file can't be read, nothing is written and you get today's behaviour (native `✳`).
 
+#### Shells orphaned by subagents
+
+A subagent can start a background shell and finish without stopping it. Nothing is waiting on that shell, but `status` keeps reading `shell` until it exits, which for a dev server is never, so the tab would sit on `⧗` for good. When `status` reads `shell` and no subagent is alive (which needs the [`term-agents.sh`](#background-subagents) hooks; without them a running subagent's shells can read as orphaned), `term-defer.sh` works out who started each live tool shell:
+
+- the command a shell runs is the `eval '<command>'` part of its `argv`, unquoted with `shlex`;
+- every transcript records its Bash calls, so each subagent transcript (`<projects>/<session_id>/subagents/agent-<agent_id>.jsonl`) lists the commands that agent left running with `run_in_background`, and the main transcript lists every command the main agent ran (including ones moved to the background later).
+
+If every live shell matches a command from a subagent that has finished, and none matches one the main agent started, the tab gets `◎` instead of `⧗`. Anything that can't be attributed counts as real work, so the fallback is still `⧗`. The done sound stays off either way, since `term-done.sh` skips while `status` reads `shell`.
+
+When an orphaned shell does exit, Claude Code wakes the subagent that started it to wrap up, so `◎` can turn into a short `⧗` before the final `✳`.
+
 #### Background subagents
 
 A subagent runs *inside* the `claude` process and spawns no child of its own, so the scan above can't see it. `term-agents.sh` records them instead, on the two events Claude fires around every subagent:
@@ -262,8 +275,8 @@ Caches live in `~/.claude/statusline-cache/` (or under `$CLAUDE_CONFIG_DIR`); a 
 
 ## Customizing
 
-- **Glyphs:** edit the `✦`/`✿` characters in `term-perm.sh` (and the `"✦"` argument in your `settings.json` `PreToolUse` entry). Any single grapheme works. For `⧗`, either edit the default in `term-busy.sh` or set `TERM_BUSY_GLYPH` in its `settings.json` entry: `env TERM_BUSY_GLYPH=⏳ sh "/ABS/PATH/term-busy.sh"`.
-- **Debugging the `Stop` hook:** it's invisible by design when there's nothing to report. `touch ~/.claude/terminal-signals.debug` and every turn end appends what it saw — owning pid, live shell pids, live agent ids — to `~/.claude/terminal-signals.log`, plus a `done run|skip …` line from `term-done.sh`. Delete the marker to stop.
+- **Glyphs:** edit the `✦`/`✿` characters in `term-perm.sh` (and the `"✦"` argument in your `settings.json` `PreToolUse` entry). Any single grapheme works. For `⧗`, either edit the default in `term-busy.sh` or set `TERM_BUSY_GLYPH` in its `settings.json` entry: `env TERM_BUSY_GLYPH=⏳ sh "/ABS/PATH/term-busy.sh"`. `◎` works the same way through `TERM_ORPHAN_GLYPH`.
+- **Debugging the `Stop` hook:** it's invisible by design when there's nothing to report. `touch ~/.claude/terminal-signals.debug` and every turn end appends what it saw — owning pid, live shell pids, live agent ids — to `~/.claude/terminal-signals.log`, plus the deferred writer's decision (`defer owner=… status=… orphans=… wrote=…`) and a `done run|skip …` line from `term-done.sh`. Delete the marker to stop.
 - **Subagent liveness timeouts:** `LIVENESS` (15 min of transcript silence) and `TTL` (4 h) in `term-busy.sh`. Raise `LIVENESS` if you run agents that sit in single long tool calls and you'd rather keep the `⧗`.
 - **Color palette / count:** edit the `colors=(...)` array in `claude-session-color.zsh`. Only the colors Claude's `/color` accepts are valid: `red, blue, green, yellow, purple, orange, pink, cyan, default` (`magenta` is **not** valid).
 - **Title length:** the hook caps the name at 60 chars; tweak in `term-title.sh`.
