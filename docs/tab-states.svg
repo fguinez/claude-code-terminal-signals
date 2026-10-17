@@ -37,7 +37,7 @@
   <text x="78" y="193" class="name">Watch the release pipeline</text>
   <text x="736" y="193" class="cap" text-anchor="end">background work · purple session</text>
 
-  <!-- row 4: only orphaned subagent shells left (cyan session): Claude is done -->
+  <!-- row 4: only orphaned shells left (cyan session): Claude is done -->
   <rect x="24" y="224" width="4" height="26" rx="2" fill="#89dceb"/>
   <text x="44" y="243" class="glyph" fill="#89dceb">◎</text>
   <text x="78" y="243" class="name">Prototype the landing page</text>
@@ -58,5 +58,5 @@
   <line x1="24" y1="372" x2="736" y2="372" stroke="#313244" stroke-width="1"/>
   <text x="24" y="398" class="foot">Glyph shape = state · color = which session · name = the conversation</text>
   <text x="24" y="418" class="foot">✦ / ✿ = waiting on you · ⧗ = looks finished, but work is still running.</text>
-  <text x="24" y="438" class="foot">◎ = Claude is done; only shells left by finished subagents still run.</text>
+  <text x="24" y="438" class="foot">◎ = Claude is done; only shells nothing waits on still run.</text>
 </svg>

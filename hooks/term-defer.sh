@@ -25,9 +25,10 @@
 # TERM_DEFER_SHELLS=1 (term-busy.sh's process scan) only decides when the state
 # file can't be read at all.
 #
-# Shells left behind by subagents that have already finished also keep the status
-# at "shell", often for good (a dev server). When those are the only work left the
-# tab gets TERM_DEFER_ORPHAN_GLYPH (◎) instead of ⧗; term-done.sh stays silent.
+# Shells left behind by subagents that have already finished, or started by Claude
+# in an earlier turn, also keep the status at "shell", often for good (a dev
+# server). When those are the only work left the tab gets TERM_DEFER_ORPHAN_GLYPH
+# (◎) instead of ⧗; term-done.sh stays silent.
 #
 # Usage: term-defer.sh <tty path> <session json> <escape sequence>
 [ $# -eq 3 ] || exit 0
@@ -105,36 +106,70 @@ def eval_command(cmd):
         return None
 
 
-def bash_commands(path, background_only):
-    """Bash commands the transcript at `path` ran (only run_in_background ones if asked)."""
-    marker = '"run_in_background":true' if background_only else '"name":"Bash"'
-    found = set()
+def bash_runs(path):
+    """(turn start, [(timestamp, command, backgrounded)]) for the Bash calls at `path`.
+
+    A turn starts at the latest prompt the user typed; task notifications,
+    subagent hand-backs, compaction summaries and tool results don't count as
+    prompts. A command counts as background whether it asked for it or was
+    moved there later (auto-backgrounded, Ctrl+B).
+    """
+    tagged, guessed, runs, backgrounded = '', '', {}, set()
     try:
         with open(path) as fh:
             for line in fh:
-                if marker not in line:
+                # Skip parsing plain tool results, often the bulk of a transcript.
+                if not ('"name":"Bash"' in line or 'backgroundTaskId' in line
+                        or ('"type":"user"' in line and '"tool_result"' not in line)):
                     continue
                 try:
-                    content = json.loads(line).get('message', {}).get('content')
+                    entry = json.loads(line)
                 except Exception:
                     continue
-                for item in content if isinstance(content, list) else []:
+                ts = entry.get('timestamp') or ''
+                content = entry.get('message', {}).get('content')
+                items = content if isinstance(content, list) else []
+                if entry.get('type') == 'user':
+                    result = entry.get('toolUseResult')
+                    if isinstance(result, dict) and result.get('backgroundTaskId'):
+                        backgrounded |= {i.get('tool_use_id') for i in items
+                                         if isinstance(i, dict)}
+                    origin = entry.get('origin')
+                    if isinstance(origin, dict):
+                        if origin.get('kind') == 'human':
+                            tagged = max(tagged, ts)
+                        continue
+                    # Older transcripts carry no `origin`: a typed prompt is
+                    # plain text that isn't a harness <tag> or [marker].
+                    text = content if isinstance(content, str) else ''.join(
+                        i.get('text') or '' for i in items
+                        if isinstance(i, dict) and i.get('type') == 'text')
+                    if (not entry.get('isMeta') and not entry.get('isCompactSummary')
+                            and not entry.get('isSidechain')
+                            and text.strip() and text.lstrip()[0] not in '<['):
+                        guessed = max(guessed, ts)
+                    continue
+                for item in items:
                     inp = item.get('input') or {}
                     if (item.get('type') == 'tool_use' and item.get('name') == 'Bash'
-                            and inp.get('command')
-                            and (inp.get('run_in_background') or not background_only)):
-                        found.add(inp['command'])
+                            and inp.get('command')):
+                        runs[item.get('id')] = (ts, inp['command'],
+                                                bool(inp.get('run_in_background')))
     except OSError:
         pass
-    return found
+    # Only fall back to guessing for transcripts that predate `origin`.
+    return tagged or guessed, [(ts, c, bg or key in backgrounded)
+                               for key, (ts, c, bg) in runs.items()]
 
 
 def only_orphans():
-    """True when every live tool shell was started by a subagent that has finished.
+    """True when every live tool shell is one nothing is waiting on.
 
-    Shells are matched by argv against each finished subagent's background
-    commands (finished: its term-agents.sh marker is gone); one the main agent
-    ran, or one that can't be attributed, still counts as real work.
+    That is a shell started by a subagent that has finished (its term-agents.sh
+    marker is gone), or one the main agent started in the background in an
+    earlier turn: the user has prompted since, so Claude isn't idling on it.
+    Shells are matched by argv; one the main agent ran this turn, or one that
+    can't be attributed, still counts as real work.
     """
     try:
         data = json.loads(os.environ.get('TERM_SIGNALS_PAYLOAD') or '{}')
@@ -178,9 +213,11 @@ def only_orphans():
                  for p in glob.glob(os.path.join(glob.escape(r), '**', 'agent-*.jsonl'),
                                     recursive=True)}:
         if os.path.basename(path)[len('agent-'):-len('.jsonl')] not in running:
-            orphaned |= bash_commands(path, True)
-    mine = bash_commands(transcript, False) if transcript else set()
-    return all(c in orphaned and c not in mine for c in live)
+            orphaned |= {c for _, c, bg in bash_runs(path)[1] if bg}
+    turn_start, runs = bash_runs(transcript) if transcript else ('', [])
+    current = {c for ts, c, _ in runs if ts >= turn_start}
+    earlier = {c for ts, c, bg in runs if bg and ts < turn_start}
+    return all(c in (orphaned | earlier) and c not in current for c in live)
 
 
 def orphan_title():
