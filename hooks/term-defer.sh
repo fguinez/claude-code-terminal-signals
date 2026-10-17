@@ -25,9 +25,10 @@
 # TERM_DEFER_SHELLS=1 (term-busy.sh's process scan) only decides when the state
 # file can't be read at all.
 #
-# Shells left behind by subagents that have already finished also keep the status
-# at "shell", often for good (a dev server). When those are the only work left the
-# tab gets TERM_DEFER_ORPHAN_GLYPH (◎) instead of ⧗; term-done.sh stays silent.
+# Shells left behind by subagents that have already finished, or started by Claude
+# in an earlier turn, also keep the status at "shell", often for good (a dev
+# server). When those are the only work left the tab gets TERM_DEFER_ORPHAN_GLYPH
+# (◎) instead of ⧗; term-done.sh stays silent.
 #
 # Usage: term-defer.sh <tty path> <session json> <escape sequence>
 [ $# -eq 3 ] || exit 0
@@ -105,14 +106,13 @@ def eval_command(cmd):
         return None
 
 
-def bash_commands(path, background_only):
-    """Bash commands the transcript at `path` ran (only run_in_background ones if asked)."""
-    marker = '"run_in_background":true' if background_only else '"name":"Bash"'
+def background_commands(path):
+    """Bash commands the transcript at `path` ran with run_in_background."""
     found = set()
     try:
         with open(path) as fh:
             for line in fh:
-                if marker not in line:
+                if '"run_in_background":true' not in line:
                     continue
                 try:
                     content = json.loads(line).get('message', {}).get('content')
@@ -121,20 +121,66 @@ def bash_commands(path, background_only):
                 for item in content if isinstance(content, list) else []:
                     inp = item.get('input') or {}
                     if (item.get('type') == 'tool_use' and item.get('name') == 'Bash'
-                            and inp.get('command')
-                            and (inp.get('run_in_background') or not background_only)):
+                            and inp.get('command') and inp.get('run_in_background')):
                         found.add(inp['command'])
     except OSError:
         pass
     return found
 
 
-def only_orphans():
-    """True when every live tool shell was started by a subagent that has finished.
+def main_commands(path):
+    """Bash commands the main agent ran: (this turn's, background ones from earlier turns).
 
-    Shells are matched by argv against each finished subagent's background
-    commands (finished: its term-agents.sh marker is gone); one the main agent
-    ran, or one that can't be attributed, still counts as real work.
+    A turn starts at the latest prompt the user typed; task notifications,
+    subagent hand-backs and tool results don't count as prompts.
+    """
+    turn_start, runs = '', []
+    try:
+        with open(path) as fh:
+            for line in fh:
+                if '"name":"Bash"' not in line and '"type":"user"' not in line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                ts = entry.get('timestamp') or ''
+                content = entry.get('message', {}).get('content')
+                if entry.get('type') == 'user':
+                    origin = entry.get('origin')
+                    if isinstance(origin, dict):
+                        human = origin.get('kind') == 'human'
+                    else:
+                        # Older transcripts carry no `origin`: a typed prompt is
+                        # plain text that isn't a harness <tag>.
+                        text = content if isinstance(content, str) else ''.join(
+                            i.get('text') or '' for i in content or []
+                            if isinstance(i, dict) and i.get('type') == 'text')
+                        human = (not entry.get('isMeta') and bool(text.strip())
+                                 and not text.lstrip().startswith('<'))
+                    if human and ts > turn_start:
+                        turn_start = ts
+                    continue
+                for item in content if isinstance(content, list) else []:
+                    inp = item.get('input') or {}
+                    if (item.get('type') == 'tool_use' and item.get('name') == 'Bash'
+                            and inp.get('command')):
+                        runs.append((ts, inp['command'], bool(inp.get('run_in_background'))))
+    except OSError:
+        pass
+    current = {c for ts, c, _ in runs if ts >= turn_start}
+    earlier = {c for ts, c, bg in runs if bg and ts < turn_start}
+    return current, earlier
+
+
+def only_orphans():
+    """True when every live tool shell is one nothing is waiting on.
+
+    That is a shell started by a subagent that has finished (its term-agents.sh
+    marker is gone), or one the main agent started in the background in an
+    earlier turn: the user has prompted since, so Claude isn't idling on it.
+    Shells are matched by argv; one the main agent ran this turn, or one that
+    can't be attributed, still counts as real work.
     """
     try:
         data = json.loads(os.environ.get('TERM_SIGNALS_PAYLOAD') or '{}')
@@ -178,9 +224,9 @@ def only_orphans():
                  for p in glob.glob(os.path.join(glob.escape(r), '**', 'agent-*.jsonl'),
                                     recursive=True)}:
         if os.path.basename(path)[len('agent-'):-len('.jsonl')] not in running:
-            orphaned |= bash_commands(path, True)
-    mine = bash_commands(transcript, False) if transcript else set()
-    return all(c in orphaned and c not in mine for c in live)
+            orphaned |= background_commands(path)
+    current, earlier = main_commands(transcript) if transcript else (set(), set())
+    return all(c in (orphaned | earlier) and c not in current for c in live)
 
 
 def orphan_title():

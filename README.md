@@ -8,7 +8,7 @@ Three small, independent features:
    - `✦ <name>` — Claude is asking a clarifying question (`AskUserQuestion`)
    - `✿ <name>` — Claude is waiting for you to approve a tool/permission
    - `⧗ <name>` — Claude finished replying but left work running in the background (a shell or a subagent), so it isn't your turn yet (replaces the native `✳`)
-   - `◎ <name>` — Claude is finished, but a shell left behind by a subagent that already ended is still running (a dev server, a forgotten `sleep`); kill it from `/tasks` when you're done with it
+   - `◎ <name>` — Claude is finished, but a shell nothing is waiting on is still running (a dev server, a forgotten `sleep`): one left behind by a subagent that already ended, or one Claude started in an earlier turn; kill it from `/tasks` when you're done with it
 
    The same check gates "finished" sounds: with [peon-ping](https://github.com/PeonPing/peon-ping), the done sound plays only when the tab really reads `✳`. See [Sound hooks](#sound-hooks).
 2. **Unique bar color per session** — every new interactive `claude` session opens with a different `/color`, so tabs are visually distinct at a glance.
@@ -16,7 +16,7 @@ Three small, independent features:
 
 ## Demo
 
-![Six Claude Code terminal tabs, each in a different session color, each prefixed by a state glyph: ⠋ working, ✳ finished, ⧗ background work still running, ◎ only orphaned subagent shells left running, ✦ clarifying question, ✿ permission prompt — with the conversation name as the label](docs/tab-states.svg)
+![Six Claude Code terminal tabs, each in a different session color, each prefixed by a state glyph: ⠋ working, ✳ finished, ⧗ background work still running, ◎ only orphaned shells left running, ✦ clarifying question, ✿ permission prompt — with the conversation name as the label](docs/tab-states.svg)
 
 *Two sessions need you (`✦`, `✿`) and four don't (`⠋`, `✳`, `⧗`, `◎`) — and each is a different color. You can tell which is which without opening any of them.*
 
@@ -31,7 +31,7 @@ By default, Claude Code already labels the tab with the conversation's AI-genera
 | `⠋` — moving braille dot (animated) | Working / generating | Claude Code (built-in) |
 | `✳` | Finished — idle, waiting for your next message | Claude Code (built-in) |
 | `⧗` | Finished replying, but background work is still running | **this repo** |
-| `◎` | Finished; only shells orphaned by finished subagents are still running | **this repo** |
+| `◎` | Finished; only orphaned shells (from finished subagents or earlier turns) are still running | **this repo** |
 | `✦` | Asking a clarifying question (`AskUserQuestion`) | **this repo** |
 | `✿` | Waiting for you to approve a permission | **this repo** |
 
@@ -150,7 +150,7 @@ Claude Code lets a hook return a `terminalSequence` that it writes to the termin
 
 - **`AskUserQuestion` (PreToolUse)** → `term-title.sh` emits `✦ <name>`.
 - **`PermissionRequest`** → `term-perm.sh` picks the glyph (`✦` for an `AskUserQuestion`, `✿` for a real permission prompt) and hands off to `term-title.sh`.
-- **`Stop`** → `term-busy.sh` (through `term-defer.sh`) writes `⧗ <name>`, or `◎ <name>` when the only work left is shells orphaned by finished subagents, but **only** if background work is still running (see below). Otherwise it stays silent, so Claude's native `✳` stands.
+- **`Stop`** → `term-busy.sh` (through `term-defer.sh`) writes `⧗ <name>`, or `◎ <name>` when the only work left is orphaned shells, but **only** if background work is still running (see below). Otherwise it stays silent, so Claude's native `✳` stands.
 
 `<name>` is resolved the same way Claude names the tab natively, in priority order:
 
@@ -184,16 +184,16 @@ The walk needs to recognize the owning `claude`, and its `argv` is not dependabl
 
 Both layers fail quiet: if the process layout changes *and* the state file can't be read, nothing is written and you get today's behaviour (native `✳`).
 
-#### Shells orphaned by subagents
+#### Orphaned shells
 
-A subagent can start a background shell and finish without stopping it. Nothing is waiting on that shell, but `status` keeps reading `shell` until it exits, which for a dev server is never, so the tab would sit on `⧗` for good. When `status` reads `shell` and no subagent is alive (which needs the [`term-agents.sh`](#background-subagents) hooks; without them a running subagent's shells can read as orphaned), `term-defer.sh` works out who started each live tool shell:
+A subagent can start a background shell and finish without stopping it, and Claude itself can start one (a dev server) and move on to other turns. Nothing is waiting on that shell, but `status` keeps reading `shell` until it exits, which for a dev server is never, so the tab would sit on `⧗` for good. When `status` reads `shell` and no subagent is alive (which needs the [`term-agents.sh`](#background-subagents) hooks; without them a running subagent's shells can read as orphaned), `term-defer.sh` works out who started each live tool shell:
 
 - the command a shell runs is the `eval '<command>'` part of its `argv`, unquoted with `shlex`;
-- every transcript records its Bash calls, so each subagent transcript (`<projects>/<session_id>/subagents/agent-<agent_id>.jsonl`) lists the commands that agent left running with `run_in_background`, and the main transcript lists every command the main agent ran (including ones moved to the background later).
+- every transcript records its Bash calls, so each subagent transcript (`<projects>/<session_id>/subagents/agent-<agent_id>.jsonl`) lists the commands that agent left running with `run_in_background`, and the main transcript lists every command the main agent ran (including ones moved to the background later), timestamped, alongside the prompts you typed (entries whose `origin.kind` is `human`; task notifications and subagent hand-backs don't count).
 
-If every live shell matches a command from a subagent that has finished, and none matches one the main agent started, the tab gets `◎` instead of `⧗`. Anything that can't be attributed counts as real work, so the fallback is still `⧗`. The done sound stays off either way, since `term-done.sh` skips while `status` reads `shell`.
+If every live shell matches either a command from a subagent that has finished or a background command the main agent started before your latest prompt, and none matches a command the main agent ran in the current turn, the tab gets `◎` instead of `⧗`. A shell started this turn keeps `⧗`: Claude most likely ended the turn to wait on it. Anything that can't be attributed counts as real work, so the fallback is still `⧗`. The done sound stays off either way, since `term-done.sh` skips while `status` reads `shell`.
 
-When an orphaned shell does exit, Claude Code wakes the subagent that started it to wrap up, so `◎` can turn into a short `⧗` before the final `✳`.
+When an orphaned shell does exit, Claude Code wakes the agent that started it to wrap up, so `◎` can turn into a short `⧗` before the final `✳`.
 
 #### Background subagents
 
