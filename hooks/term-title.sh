@@ -33,7 +33,11 @@ transcript = data.get('transcript_path') or ''
 
 
 def manual_name(sid):
-    # Claude /rename writes the chosen name to ~/.claude/sessions/<pid>.json.
+    # Claude /rename writes the chosen name to ~/.claude/sessions/<pid>.json —
+    # but so does Claude itself, marking its own cwd-derived label
+    # nameSource="derived". Only an explicit rename outranks the AI title;
+    # honouring a derived name shows "connections-d6" where the native tab shows
+    # the conversation's real title.
     if not sid:
         return ''
     for f in glob.glob(os.path.expanduser('~/.claude/sessions/*.json')):
@@ -42,6 +46,8 @@ def manual_name(sid):
         except Exception:
             continue
         if d.get('sessionId') == sid:
+            if d.get('nameSource') == 'derived':
+                return ''
             return (d.get('name') or '').strip()
     return ''
 
@@ -89,5 +95,10 @@ name = re.sub(r'\s+', ' ', name).strip()
 name = ''.join(ch for ch in name if ch >= ' ')[:60].strip() or 'claude'
 
 seq = '\x1b]0;{} {}\x07'.format(glyph, name)
-print(json.dumps({'terminalSequence': seq}))
+# TERM_TITLE_RAW: hand back the bare sequence instead of the hook-protocol JSON,
+# for callers that write to a tty themselves (term-defer.sh).
+if os.environ.get('TERM_TITLE_RAW'):
+    print(seq, end='')
+else:
+    print(json.dumps({'terminalSequence': seq}))
 PY

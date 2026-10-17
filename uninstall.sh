@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Uninstaller for claude-code-terminal-signals.
-#   ./uninstall.sh            # remove hooks + color wrapper, keep installed files
+#   ./uninstall.sh            # remove hooks, statusline + color wrapper, keep installed files
 #   ./uninstall.sh --purge    # also delete the install dir and color lock dir
 set -euo pipefail
 
@@ -22,7 +22,7 @@ done
 # Remove our hook entries from settings.json (leave the rest intact).
 if [ -f "$SETTINGS" ]; then
   cp "$SETTINGS" "$SETTINGS.bak.$(date +%Y%m%d%H%M%S)"
-  SETTINGS="$SETTINGS" python3 <<'PY'
+  INSTALL_DIR="$INSTALL_DIR" SETTINGS="$SETTINGS" python3 <<'PY'
 import json, os, sys
 settings = os.environ['SETTINGS']
 try:
@@ -31,7 +31,11 @@ try:
 except Exception:
     sys.exit(0)
 hooks = cfg.get('hooks', {})
-for event, needle in (('PreToolUse', 'term-title.sh'), ('PermissionRequest', 'term-perm.sh')):
+for event, needle in (('PreToolUse', 'term-title.sh'),
+                      ('PermissionRequest', 'term-perm.sh'),
+                      ('Stop', 'term-busy.sh'),
+                      ('SubagentStart', 'term-agents.sh'),
+                      ('SubagentStop', 'term-agents.sh')):
     kept = []
     for g in hooks.get(event, []):
         g = dict(g)
@@ -42,11 +46,21 @@ for event, needle in (('PreToolUse', 'term-title.sh'), ('PermissionRequest', 'te
         hooks[event] = kept
     elif event in hooks:
         del hooks[event]
+# unwrap hooks we gated behind term-done.sh, restoring the original command
+for event in ('Stop', 'Notification'):
+    for g in hooks.get(event, []):
+        for h in g.get('hooks', []):
+            cmd = h.get('command') or ''
+            if cmd.startswith('sh "') and '/term-done.sh" ' in cmd:
+                h['command'] = cmd.split('/term-done.sh" ', 1)[1]
+# only a statusLine pointing at our own script; someone else's stays
+if '%s/statusline.sh' % os.environ['INSTALL_DIR'] in ((cfg.get('statusLine') or {}).get('command') or ''):
+    del cfg['statusLine']
 with open(settings, 'w') as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
     f.write('\n')
 PY
-  echo "✓ Removed hooks from $SETTINGS"
+  echo "✓ Removed hooks and statusline from $SETTINGS"
 fi
 
 # Remove the sourced color wrapper from .zshrc.
