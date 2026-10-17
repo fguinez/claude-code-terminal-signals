@@ -46,6 +46,13 @@ for event, needle in (('PreToolUse', 'term-title.sh'),
         hooks[event] = kept
     elif event in hooks:
         del hooks[event]
+# unwrap hooks we gated behind term-done.sh, restoring the original command
+for event in ('Stop', 'Notification'):
+    for g in hooks.get(event, []):
+        for h in g.get('hooks', []):
+            cmd = h.get('command') or ''
+            if cmd.startswith('sh "') and '/term-done.sh" ' in cmd:
+                h['command'] = cmd.split('/term-done.sh" ', 1)[1]
 # only a statusLine pointing at our own script; someone else's stays
 if '%s/statusline.sh' % os.environ['INSTALL_DIR'] in ((cfg.get('statusLine') or {}).get('command') or ''):
     del cfg['statusLine']

@@ -8,6 +8,8 @@ Three small, independent features:
    - `✦ <name>` — Claude is asking a clarifying question (`AskUserQuestion`)
    - `✿ <name>` — Claude is waiting for you to approve a tool/permission
    - `⧗ <name>` — Claude finished replying but left work running in the background (a shell or a subagent), so it isn't your turn yet (replaces the native `✳`)
+
+   The same check gates "finished" sounds: with [peon-ping](https://github.com/PeonPing/peon-ping), the done sound plays only when the tab really reads `✳`. See [Sound hooks](#sound-hooks).
 2. **Unique bar color per session** — every new interactive `claude` session opens with a different `/color`, so tabs are visually distinct at a glance.
 3. **Powerline statusline**: one bar under the prompt with the model, folder, git branch, the PRs and Linear issue the session is working on, plan usage, and context and prompt-cache health. See [Statusline](#statusline).
 
@@ -79,7 +81,7 @@ Options:
 ./install.sh --dir PATH            # custom install dir (default: ~/.claude/terminal-signals)
 ```
 
-The installer is **idempotent** and **non-destructive**: it backs up `settings.json` before editing and only touches the hook entries it owns (anything referencing `term-title.sh` / `term-perm.sh` / `term-busy.sh` / `term-agents.sh`), so it won't disturb other hooks you have (e.g. [peon-ping](https://github.com/PeonPing/peon-ping)). It also leaves an existing `statusLine` alone unless you pass `--replace-statusline`.
+The installer is **idempotent** and **non-destructive**: it backs up `settings.json` before editing and only touches the hook entries it owns (anything referencing `term-title.sh` / `term-perm.sh` / `term-busy.sh` / `term-agents.sh`), so it won't disturb other hooks you have. The one exception is [peon-ping](https://github.com/PeonPing/peon-ping): its `Stop` and `Notification` hooks are wrapped in `term-done.sh` (see [Sound hooks](#sound-hooks)), and `uninstall.sh` unwraps them. It also leaves an existing `statusLine` alone unless you pass `--replace-statusline`.
 
 ### Manual install
 
@@ -110,12 +112,17 @@ If you'd rather wire it up yourself:
      }
    }
    ```
-3. For colors, source the wrapper from `~/.zshrc`:
+3. Optionally, prefix any "finished" sound hook on `Stop` / `Notification` with `term-done.sh`, keeping it `async` with a `timeout` of at least 15 (see [Sound hooks](#sound-hooks)):
+
+   ```json
+   { "type": "command", "command": "sh \"/ABS/PATH/term-done.sh\" /path/to/peon.sh", "timeout": 15, "async": true }
+   ```
+4. For colors, source the wrapper from `~/.zshrc`:
 
    ```zsh
    source "/ABS/PATH/shell/claude-session-color.zsh"
    ```
-4. For the statusline, copy the three files in `statusline/` into one folder (`statusline.sh` calls the two `.py` helpers from its own directory) and add:
+5. For the statusline, copy the three files in `statusline/` into one folder (`statusline.sh` calls the two `.py` helpers from its own directory) and add:
 
    ```json
    { "statusLine": { "type": "command", "command": "bash \"/ABS/PATH/statusline.sh\"" } }
@@ -181,6 +188,18 @@ A marker is state, and state drifts: an interrupt or a crash could leave one beh
 
 Both timeouts fail toward the native `✳`, never toward a stuck `⧗`. To wipe the slate by hand: `rm -rf ~/.claude/terminal-signals/agents`.
 
+### Sound hooks
+
+Sound hooks such as [peon-ping](https://github.com/PeonPing/peon-ping) play their "done" sound on every `Stop`, so a session that works through several background shells or subagents chimes once per turn while it isn't actually finished. `term-done.sh` wraps such a hook and runs it only when the tab will read `✳`:
+
+```
+sh "/ABS/PATH/term-done.sh" <your hook command>
+```
+
+It applies the same two checks as `⧗`: it waits for the session `status` to settle, skips the hook while it reads `shell`, and skips it while a subagent marker is alive. Only `Stop` and the `idle_prompt` notification (which peon-ping also maps to its done sound) are gated; every other event, and any session whose state file can't be found, goes straight through. The hook payload is forwarded on stdin, so the wrapped hook sees exactly what it would have. Keep the entry `async`: the wait for `status` costs the turn nothing that way.
+
+When the background work finishes, Claude Code picks the session back up, and the turn that really ends it plays the sound.
+
 ### Unique bar color per session
 
 `shell/claude-session-color.zsh` defines a `claude()` wrapper. On an **interactive** launch it:
@@ -244,7 +263,7 @@ Caches live in `~/.claude/statusline-cache/` (or under `$CLAUDE_CONFIG_DIR`); a 
 ## Customizing
 
 - **Glyphs:** edit the `✦`/`✿` characters in `term-perm.sh` (and the `"✦"` argument in your `settings.json` `PreToolUse` entry). Any single grapheme works. For `⧗`, either edit the default in `term-busy.sh` or set `TERM_BUSY_GLYPH` in its `settings.json` entry: `env TERM_BUSY_GLYPH=⏳ sh "/ABS/PATH/term-busy.sh"`.
-- **Debugging the `Stop` hook:** it's invisible by design when there's nothing to report. `touch ~/.claude/terminal-signals.debug` and every turn end appends what it saw — owning pid, live shell pids, live agent ids — to `~/.claude/terminal-signals.log`. Delete the marker to stop.
+- **Debugging the `Stop` hook:** it's invisible by design when there's nothing to report. `touch ~/.claude/terminal-signals.debug` and every turn end appends what it saw — owning pid, live shell pids, live agent ids — to `~/.claude/terminal-signals.log`, plus a `done run|skip …` line from `term-done.sh`. Delete the marker to stop.
 - **Subagent liveness timeouts:** `LIVENESS` (15 min of transcript silence) and `TTL` (4 h) in `term-busy.sh`. Raise `LIVENESS` if you run agents that sit in single long tool calls and you'd rather keep the `⧗`.
 - **Color palette / count:** edit the `colors=(...)` array in `claude-session-color.zsh`. Only the colors Claude's `/color` accepts are valid: `red, blue, green, yellow, purple, orange, pink, cyan, default` (`magenta` is **not** valid).
 - **Title length:** the hook caps the name at 60 chars; tweak in `term-title.sh`.
@@ -255,7 +274,7 @@ Caches live in `~/.claude/statusline-cache/` (or under `$CLAUDE_CONFIG_DIR`); a 
 ## Compatibility notes
 
 - The color wrapper is **zsh-only**. Bash users would need to port the `claude()` function (the lock logic is portable; the array/glob syntax is zsh-specific).
-- Plays nicely alongside [peon-ping](https://github.com/PeonPing/peon-ping) (sounds + working/ready status). The installer front-loads its hook entries so the attention glyph wins over other title-writing hooks for those events.
+- Plays nicely alongside [peon-ping](https://github.com/PeonPing/peon-ping) (sounds + working/ready status). The installer front-loads its hook entries so the attention glyph wins over other title-writing hooks for those events, and gates peon-ping's done sound behind `term-done.sh`. Only a plain `…/peon.sh` command is wrapped; wrap anything else by hand.
 
 ## License
 
