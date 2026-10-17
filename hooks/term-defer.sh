@@ -106,39 +106,21 @@ def eval_command(cmd):
         return None
 
 
-def background_commands(path):
-    """Bash commands the transcript at `path` ran with run_in_background."""
-    found = set()
-    try:
-        with open(path) as fh:
-            for line in fh:
-                if '"run_in_background":true' not in line:
-                    continue
-                try:
-                    content = json.loads(line).get('message', {}).get('content')
-                except Exception:
-                    continue
-                for item in content if isinstance(content, list) else []:
-                    inp = item.get('input') or {}
-                    if (item.get('type') == 'tool_use' and item.get('name') == 'Bash'
-                            and inp.get('command') and inp.get('run_in_background')):
-                        found.add(inp['command'])
-    except OSError:
-        pass
-    return found
-
-
-def main_commands(path):
-    """Bash commands the main agent ran: (this turn's, background ones from earlier turns).
+def bash_runs(path):
+    """(turn start, [(timestamp, command, backgrounded)]) for the Bash calls at `path`.
 
     A turn starts at the latest prompt the user typed; task notifications,
-    subagent hand-backs and tool results don't count as prompts.
+    subagent hand-backs, compaction summaries and tool results don't count as
+    prompts. A command counts as background whether it asked for it or was
+    moved there later (auto-backgrounded, Ctrl+B).
     """
-    turn_start, runs = '', []
+    tagged, guessed, runs, backgrounded = '', '', {}, set()
     try:
         with open(path) as fh:
             for line in fh:
-                if '"name":"Bash"' not in line and '"type":"user"' not in line:
+                # Skip parsing plain tool results, often the bulk of a transcript.
+                if not ('"name":"Bash"' in line or 'backgroundTaskId' in line
+                        or ('"type":"user"' in line and '"tool_result"' not in line)):
                     continue
                 try:
                     entry = json.loads(line)
@@ -146,31 +128,38 @@ def main_commands(path):
                     continue
                 ts = entry.get('timestamp') or ''
                 content = entry.get('message', {}).get('content')
+                items = content if isinstance(content, list) else []
                 if entry.get('type') == 'user':
+                    result = entry.get('toolUseResult')
+                    if isinstance(result, dict) and result.get('backgroundTaskId'):
+                        backgrounded |= {i.get('tool_use_id') for i in items
+                                         if isinstance(i, dict)}
                     origin = entry.get('origin')
                     if isinstance(origin, dict):
-                        human = origin.get('kind') == 'human'
-                    else:
-                        # Older transcripts carry no `origin`: a typed prompt is
-                        # plain text that isn't a harness <tag>.
-                        text = content if isinstance(content, str) else ''.join(
-                            i.get('text') or '' for i in content or []
-                            if isinstance(i, dict) and i.get('type') == 'text')
-                        human = (not entry.get('isMeta') and bool(text.strip())
-                                 and not text.lstrip().startswith('<'))
-                    if human and ts > turn_start:
-                        turn_start = ts
+                        if origin.get('kind') == 'human':
+                            tagged = max(tagged, ts)
+                        continue
+                    # Older transcripts carry no `origin`: a typed prompt is
+                    # plain text that isn't a harness <tag> or [marker].
+                    text = content if isinstance(content, str) else ''.join(
+                        i.get('text') or '' for i in items
+                        if isinstance(i, dict) and i.get('type') == 'text')
+                    if (not entry.get('isMeta') and not entry.get('isCompactSummary')
+                            and not entry.get('isSidechain')
+                            and text.strip() and text.lstrip()[0] not in '<['):
+                        guessed = max(guessed, ts)
                     continue
-                for item in content if isinstance(content, list) else []:
+                for item in items:
                     inp = item.get('input') or {}
                     if (item.get('type') == 'tool_use' and item.get('name') == 'Bash'
                             and inp.get('command')):
-                        runs.append((ts, inp['command'], bool(inp.get('run_in_background'))))
+                        runs[item.get('id')] = (ts, inp['command'],
+                                                bool(inp.get('run_in_background')))
     except OSError:
         pass
-    current = {c for ts, c, _ in runs if ts >= turn_start}
-    earlier = {c for ts, c, bg in runs if bg and ts < turn_start}
-    return current, earlier
+    # Only fall back to guessing for transcripts that predate `origin`.
+    return tagged or guessed, [(ts, c, bg or key in backgrounded)
+                               for key, (ts, c, bg) in runs.items()]
 
 
 def only_orphans():
@@ -224,8 +213,10 @@ def only_orphans():
                  for p in glob.glob(os.path.join(glob.escape(r), '**', 'agent-*.jsonl'),
                                     recursive=True)}:
         if os.path.basename(path)[len('agent-'):-len('.jsonl')] not in running:
-            orphaned |= background_commands(path)
-    current, earlier = main_commands(transcript) if transcript else (set(), set())
+            orphaned |= {c for _, c, bg in bash_runs(path)[1] if bg}
+    turn_start, runs = bash_runs(transcript) if transcript else ('', [])
+    current = {c for ts, c, _ in runs if ts >= turn_start}
+    earlier = {c for ts, c, bg in runs if bg and ts < turn_start}
     return all(c in (orphaned | earlier) and c not in current for c in live)
 
 
