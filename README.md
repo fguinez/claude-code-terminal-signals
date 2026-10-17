@@ -53,11 +53,11 @@ The `✳` "finished" mark has the mirror problem — it appears the moment Claud
 
 ## Requirements
 
-- **Claude Code** (`claude` CLI).
+- **Claude Code** v2.1.141+ (`claude` CLI) — the attention glyphs rely on the `terminalSequence` hook output, which older versions don't emit.
 - **python3** — used by the hooks (JSON parsing, process scan) and the installer.
 - **zsh** — required only for the per-session color feature. The attention-glyph hooks are shell-agnostic.
 - **jq**, a [Nerd Font](https://www.nerdfonts.com/) and a truecolor terminal, for the statusline only.
-- macOS or Linux. (The glyphs use OSC title escapes supported by iTerm2, Terminal.app, the VS Code integrated terminal, Warp, etc.)
+- macOS or Linux. (The glyphs use OSC title escapes supported by standalone terminals like iTerm2, Terminal.app, Ghostty, Warp, etc. The VS Code / Cursor integrated terminal needs one extra setting — see [Cursor / VS Code integrated terminal](#cursor--vs-code-integrated-terminal).)
 
 ---
 
@@ -84,6 +84,16 @@ Options:
 ```
 
 The installer is **idempotent** and **non-destructive**: it backs up `settings.json` before editing and only touches the hook entries it owns (anything referencing `term-title.sh` / `term-perm.sh` / `term-busy.sh` / `term-agents.sh`), so it won't disturb other hooks you have. The one exception is [peon-ping](https://github.com/PeonPing/peon-ping): its `Stop` and `Notification` hooks are wrapped in `term-done.sh` (see [Sound hooks](#sound-hooks)), and `uninstall.sh` unwraps them. It also leaves an existing `statusLine` alone unless you pass `--replace-statusline`.
+
+### Cursor / VS Code integrated terminal
+
+The integrated terminal in Cursor / VS Code does **not** show OSC titles out of the box. Add this to your Cursor/VS Code `settings.json` so the tab picks up the glyph:
+
+```json
+"terminal.integrated.tabs.title": "${sequence}"
+```
+
+(Not needed for standalone terminals like Ghostty, iTerm2, Terminal.app or Warp — they honor OSC titles natively.)
 
 ### Manual install
 

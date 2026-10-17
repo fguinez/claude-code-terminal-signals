@@ -204,3 +204,8 @@ fi
 if [ "$DO_COLOR" -eq 1 ]; then
   echo "  • Run 'source ~/.zshrc' (or open a new terminal) to enable per-session colors."
 fi
+if [ "$DO_HOOKS" -eq 1 ]; then
+  echo "  • Cursor / VS Code integrated terminal? Its tabs don't show OSC titles by"
+  echo "    default — add this to your editor settings.json so the glyphs appear:"
+  echo '        "terminal.integrated.tabs.title": "${sequence}"'
+fi
