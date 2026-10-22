@@ -7,7 +7,8 @@
 #                         directory (truncated like starship: last 3, "../")
 #             yellow   -> that repo's branch + dirty/ahead-behind indicator
 #   tracking  blue     -> PRs this session created or acted on, as OSC 8 hyperlinks
-#             sapphire -> the Linear issue this session is about, as an OSC 8 hyperlink
+#             sapphire -> the issue, incident or card this session is about
+#                         (Linear, incident.io, ...), as an OSC 8 hyperlink
 #   usage     greens   -> 5h window, 7d window, Fable weekly bucket (Fable models only)
 #   context   maroon   -> context window consumed % + prompt-cache health
 # The model/workspace/tracking groups sit on the left, usage/context on the
@@ -192,14 +193,15 @@ pr_label() {
   pr_width=${#plain}
 }
 
-# --- sapphire: the Linear issue this session is about ---
-# One issue at most: a session implements, QAs or babysits a single issue even
-# when others come up along the way. statusline-issue.py scores the mentions.
-# Off unless both the workspace slug and its team keys are set.
-LINEAR_WORKSPACE="${CLAUDE_STATUSLINE_LINEAR_WORKSPACE:-}"
-issue_key=""
-if [ -n "$LINEAR_WORKSPACE" ] && [ -n "$transcript" ] && [ -f "$transcript" ]; then
-  issue_key="$(python3 "$SCRIPT_DIR/statusline-issue.py" "$transcript" "$session_id" "$branch" 2>/dev/null | head -n 1)"
+# --- sapphire: the issue, incident or card this session is about ---
+# One at most, across all trackers: a session implements, QAs or babysits a
+# single issue even when others come up along the way. statusline-issue.py
+# scores the mentions and builds the link; each tracker is off until its env
+# vars are set.
+issue_key="" issue_url=""
+if [ -n "$transcript" ] && [ -f "$transcript" ]; then
+  IFS=$'\t' read -r issue_key issue_url <<<"$(
+    python3 "$SCRIPT_DIR/statusline-issue.py" "$transcript" "$session_id" "$branch" 2>/dev/null | head -n 1)"
 fi
 
 # --- green / teal: time left in the 5h and 7d windows + usage consumed ---
@@ -354,7 +356,7 @@ fi
 #   3 dir down to 1 folder         9 dir segment dropped
 #   4 day counts rounded up (<2d) 10 PR segment dropped
 #   5 effort abbreviated (h, me)  11 effort dropped
-#   6 branch name capped at 20    12 Linear issue dropped
+#   6 branch name capped at 20    12 issue dropped
 #                                 13 both halves in one pill
 #                                 14 cw cache health dropped
 # When the dir pill names a repo, 9 and 10 swap: a repo name tells more than
@@ -429,8 +431,8 @@ compose() {
     add_seg "$BLUE" "$pr_text" "$pr_width"
   fi
 
-  if [ -n "$issue_key" ] && [ "$lvl" -lt 12 ]; then
-    add_seg "$SAPPHIRE" "$(link "https://linear.app/${LINEAR_WORKSPACE}/issue/${issue_key}" "$issue_key")" "${#issue_key}"
+  if [ -n "$issue_url" ] && [ "$lvl" -lt 12 ]; then
+    add_seg "$SAPPHIRE" "$(link "$issue_url" "$issue_key")" "${#issue_key}"
   fi
 
   cur_group=$G_USAGE
