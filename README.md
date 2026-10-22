@@ -12,7 +12,7 @@ Three small, independent features:
 
    The same check gates "finished" sounds: with [peon-ping](https://github.com/PeonPing/peon-ping), the done sound plays only when the tab really reads `✳`. See [Sound hooks](#sound-hooks).
 2. **Unique bar color per session** — every new interactive `claude` session opens with a different `/color`, so tabs are visually distinct at a glance.
-3. **Powerline statusline**: one bar under the prompt with the model, folder, git branch, the PRs and Linear issue the session is working on, plan usage, and context and prompt-cache health. See [Statusline](#statusline).
+3. **Powerline statusline**: one bar under the prompt with the model, folder, git branch, the PRs and the Linear issue, incident.io incident, Jira issue or Trello card the session is working on, plan usage, and context and prompt-cache health. See [Statusline](#statusline).
 
 ## Demo
 
@@ -247,7 +247,7 @@ It passes straight through (no color) when headless (`-p`/`--print`), when there
 | peach | The repo the session works in (see below), else the last three folders of the working directory, capped at 31 characters |
 | yellow | That repo's branch, `*` when dirty, `⇡ n` / `⇣ n` ahead/behind its upstream |
 | blue | PRs this session created or acted on, as clickable [OSC 8](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) links |
-| sapphire | The Linear issue this session is about, also a link (opt-in, see below) |
+| sapphire | The issue, incident or card this session is about (Linear, incident.io, Jira, Trello), also a link (opt-in, see below) |
 | greens | Time left and % used of the 5-hour and weekly windows, plus the Fable weekly bucket while a Fable model is selected |
 | maroon | Context used against the auto-compact window (`!` past 200k tokens; see below), then prompt-cache health: hit ratio while warm, the tokens the next turn re-sends once it is cold |
 
@@ -257,18 +257,26 @@ It passes straight through (no color) when headless (`-p`/`--print`), when there
 
 **PRs.** `statusline-prs.py` only counts PRs reached through a `gh pr` / `gh api` command or that command's output, so PRs merely quoted in a doc don't show up. It reads the transcript from where the previous run stopped, so a long session is scanned once. The last 3 are shown (`CLAUDE_STATUSLINE_PR_LIMIT`).
 
-**Linear issue.** `statusline-issue.py` scores every issue key it finds by where it appears: your first prompt, skill arguments and writes to Linear weigh most, the model's own prose least. Text the harness injects (memory, skill bodies, subagent reports) doesn't count, and neither do placeholder numbers like `-123` or `-1234`. The current branch name adds weight too. The top score wins once it clears a threshold. The segment is off until you set both your workspace and your team keys, for example in the `env` block of `settings.json`:
+**Issues.** `statusline-issue.py` scores every issue key it finds by where it appears: your first prompt, skill arguments and writes to the tracker (through its MCP tools) weigh most, the model's own prose least. Text the harness injects (memory, skill bodies, subagent reports) doesn't count, and neither do placeholder numbers like `-123` or `-1234`. The current branch name adds weight too. The top score across all trackers wins once it clears a threshold, so a session working an incident and its Linear follow-up shows only whichever it is more about. Every tracker is off until you set its variables, for example in the `env` block of `settings.json`:
 
 ```json
 {
   "env": {
     "CLAUDE_STATUSLINE_LINEAR_WORKSPACE": "acme",
-    "CLAUDE_STATUSLINE_LINEAR_TEAMS": "ENG OPS DES"
+    "CLAUDE_STATUSLINE_LINEAR_TEAMS": "ENG OPS DES",
+    "CLAUDE_STATUSLINE_INCIDENT_IO_ORG": "acme"
   }
 }
 ```
 
-`CLAUDE_STATUSLINE_LINEAR_WORKSPACE` is the slug in `linear.app/<slug>/…`. `CLAUDE_STATUSLINE_LINEAR_TEAMS` lists your team keys and is required too: only keys with those prefixes match, so `UTF-8` or `INC-42` aren't taken for issues.
+| Tracker | Variables | Matches | Links to |
+| --- | --- | --- | --- |
+| Linear | `CLAUDE_STATUSLINE_LINEAR_WORKSPACE`, the slug in `linear.app/<slug>/…`, and `CLAUDE_STATUSLINE_LINEAR_TEAMS`, your team keys | `ENG-42` | `linear.app/<slug>/issue/ENG-42` |
+| incident.io | `CLAUDE_STATUSLINE_INCIDENT_IO_ORG`, the slug in `app.incident.io/<slug>/…` | `INC-42` and `app.incident.io/<slug>/incidents/42` links | `app.incident.io/<slug>/incidents/42` |
+| Jira | `CLAUDE_STATUSLINE_JIRA_SITE` (`acme.atlassian.net`, or your server's host) and `CLAUDE_STATUSLINE_JIRA_PROJECTS`, your project keys | `PROJ-42` | `<site>/browse/PROJ-42` |
+| Trello | `CLAUDE_STATUSLINE_TRELLO=1` | `trello.com/c/<id>` card links, shown by their 8-character id | `trello.com/c/<id>` |
+
+The team and project keys are required: only keys with those prefixes match, so `UTF-8` or `SHA-256` aren't taken for issues. Keep the Linear and Jira lists apart; a key both claim goes to Linear.
 
 **Plan usage.** `rate_limits` is missing from the payload before the first API response, so the last values seen are cached and shown until fresh ones arrive. A window is dropped once its reset time passes. The Fable bucket never reaches the payload at all; it is read from Claude Code's own cache in `~/.claude.json` and hidden once that copy is more than 6 hours old.
 
