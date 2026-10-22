@@ -1,43 +1,40 @@
 #!/usr/bin/env python3
-"""Pick the Linear issue this session is about, for the statusline.
+"""Pick the issue, incident or card this session is about, for the statusline.
 
-A session is almost always focused on one issue (implement, QA, babysit or
-monitor it), though others get mentioned along the way. Each mention is scored
-by where it appears -- the user's own prompts and writes to Linear weigh far more
-than the model's prose -- and the top score wins once it clears a threshold.
+A session is almost always focused on one item (implement, QA, babysit or
+monitor a Linear issue; work an incident.io incident), though others get
+mentioned along the way. Each mention is scored by where it appears -- the
+user's own prompts and writes to the tracker weigh far more than the model's
+prose -- and the top score across all trackers wins once it clears a threshold.
 Injected text (memory index, skill bodies, subagent reports) is not counted:
 it quotes dozens of issues the session never touches.
+
+Trackers are opt-in, each through its own env vars (see configured_trackers):
+  Linear       CLAUDE_STATUSLINE_LINEAR_WORKSPACE + CLAUDE_STATUSLINE_LINEAR_TEAMS
+  incident.io  CLAUDE_STATUSLINE_INCIDENT_IO_ORG
+  Jira         CLAUDE_STATUSLINE_JIRA_SITE + CLAUDE_STATUSLINE_JIRA_PROJECTS
+  Trello       CLAUDE_STATUSLINE_TRELLO=1
 
 Reads the transcript incrementally, like statusline-prs.py.
 
 Usage: statusline-issue.py <transcript_path> <session_id> [current_branch]
-Output: the issue key (e.g. CON-1234), or nothing.
+Output: "<key>\t<url>" for the winner, or nothing.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import sys
+from urllib.parse import quote
 
 CACHE_DIR = os.path.join(
     os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "statusline-cache"
 )
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 MIN_SCORE = 3.0
-
-# Space-separated Linear team keys of the workspace (e.g. "ENG OPS"); a generic
-# [A-Z]+-\d+ also matches UTF-8, INC-123 (incident.io) and the like.
-TEAM_KEYS = os.environ.get("CLAUDE_STATUSLINE_LINEAR_TEAMS", "").split()
-# with no keys configured nothing can match; the placeholder keeps the regex valid
-_KEYS_ALT = "|".join(sorted(TEAM_KEYS, key=len, reverse=True)) or "(?!)"
-KEY_RE = re.compile(rf"(?<![A-Za-z0-9])({_KEYS_ALT})-(\d{{1,6}})(?![0-9])")
-KEY_RE_I = re.compile(KEY_RE.pattern, re.IGNORECASE)
-# branch names carry the key lowercased (chore/con-1234-foo); outside a branch
-# lowercase matches are prose ("top-10"), so only take them after a slash
-BRANCH_KEY_RE = re.compile(rf"(?<=/)({_KEYS_ALT})-(\d{{1,6}})(?![0-9])", re.IGNORECASE)
-KEY_BYTES_RE = re.compile(KEY_RE_I.pattern.encode(), re.IGNORECASE)
 
 GH_RE = re.compile(r"(?:^|[\n;&|]|\$\()\s*(?:[A-Za-z_]\w*=\S*\s+)*gh\s+(?:pr|api)\b")
 GH_WRITE_RE = re.compile(r"\bgh\s+pr\s+(?:create|edit)\b")
@@ -48,11 +45,20 @@ INJECTED_PREFIXES = ("<task-notification", "<local-command", "<system-reminder")
 COMMAND_ARGS_RE = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
 REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 
+# a tracker tool writes when its name carries one of these verbs and no read verb
+# (save_issue, incident_update, addCommentToJiraIssue; not incident_update_list)
+TOOL_WORD_RE = re.compile(r"[A-Z]?[a-z]+")
+WRITE_VERBS = {
+    "save", "create", "update", "edit", "delete", "add", "post", "change",
+    "transition", "move", "archive", "assign", "attach", "resolve", "merge", "comment",
+}
+READ_VERBS = {"get", "list", "show", "search", "read", "fetch", "find", "query", "lookup"}
+
 W_FIRST_PROMPT = 10.0
 W_PROMPT = 4.0
 W_SKILL_ARGS = 8.0
-W_LINEAR_WRITE = 6.0
-W_LINEAR_READ = 3.0
+W_TRACKER_WRITE = 6.0
+W_TRACKER_READ = 3.0
 W_PR_WRITE = 5.0
 W_NEW_BRANCH = 4.0
 W_PR_OUTPUT = 2.0
@@ -64,11 +70,145 @@ W_CURRENT_BRANCH = 6.0
 # example keys people type when describing a format, not an issue
 PLACEHOLDER_NUMS = {"1", "123", "1234", "12345", "0000", "9999"}
 
+# key -> [tracker name, url]
+Hits = dict[str, list[str]]
 
-def keys_in(text: str, ignore_case: bool = False) -> set[str]:
-    found = (KEY_RE_I if ignore_case else KEY_RE).findall(text)
-    found += BRANCH_KEY_RE.findall(text)
-    return {f"{team.upper()}-{num}" for team, num in found if num not in PLACEHOLDER_NUMS}
+
+class Tracker:
+    """Where a tracker's keys show up in text, and the link each one opens.
+
+    `prefixes` match KEY-123 keys; `patterns` are extra regexes (mostly links)
+    whose named groups fill the `key` and `url` templates, as do the prefix
+    match's `prefix` and `num`.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        url: str,
+        *,
+        prefixes: tuple[str, ...] | list[str] = (),
+        patterns: tuple[str, ...] = (),
+        key: str = "{prefix}-{num}",
+        tools: tuple[str, ...] = (),
+    ) -> None:
+        self.name, self.url, self.key, self.tools = name, url, key, tools
+        extra = [re.compile(p) for p in patterns]
+        self.regexes = list(extra)
+        self.regexes_i = list(extra)
+        if prefixes:
+            alt = "|".join(sorted(map(re.escape, prefixes), key=len, reverse=True))
+            key_re = rf"(?<![A-Za-z0-9])(?P<prefix>{alt})-(?P<num>\d{{1,7}})(?![0-9])"
+            # branch names carry the key lowercased (chore/con-1234-foo); outside a
+            # branch lowercase matches are prose ("top-10"), so only after a slash
+            branch_re = re.compile(rf"(?<=/)(?P<prefix>{alt})-(?P<num>\d{{1,7}})(?![0-9])", re.I)
+            self.regexes += [re.compile(key_re), branch_re]
+            self.regexes_i += [re.compile(key_re, re.I), branch_re]
+
+    def owns_tool(self, tool_name: str) -> bool:
+        lowered = tool_name.lower()
+        return any(hint in lowered for hint in self.tools)
+
+    def fingerprint(self) -> list:
+        return [self.name, self.url, self.key, [r.pattern for r in self.regexes]]
+
+
+def env_value(name: str) -> str:
+    return os.environ.get(name, "").strip()
+
+
+def configured_trackers() -> list[Tracker]:
+    trackers = []
+
+    workspace = env_value("CLAUDE_STATUSLINE_LINEAR_WORKSPACE")
+    teams = env_value("CLAUDE_STATUSLINE_LINEAR_TEAMS").split()
+    if workspace and teams:
+        trackers.append(
+            Tracker(
+                "linear",
+                f"https://linear.app/{quote(workspace, safe='')}/issue/{{key}}",
+                prefixes=teams,
+                tools=("linear",),
+            )
+        )
+
+    org = env_value("CLAUDE_STATUSLINE_INCIDENT_IO_ORG")
+    if org:
+        # incidents are INC-<n> everywhere, and their links accept the bare number
+        trackers.append(
+            Tracker(
+                "incident.io",
+                f"https://app.incident.io/{quote(org, safe='')}/incidents/{{num}}",
+                prefixes=("INC",),
+                patterns=(rf"app\.incident\.io/{re.escape(org)}/incidents/(?P<num>\d{{1,7}})(?!\w)",),
+                key="INC-{num}",
+                tools=("incident_io", "incidentio"),
+            )
+        )
+
+    site = re.sub(r"^https?://", "", env_value("CLAUDE_STATUSLINE_JIRA_SITE")).rstrip("/")
+    projects = env_value("CLAUDE_STATUSLINE_JIRA_PROJECTS").split()
+    if site and projects:
+        trackers.append(
+            Tracker(
+                "jira",
+                "https://" + site.replace("{", "{{").replace("}", "}}") + "/browse/{key}",
+                prefixes=projects,
+                tools=("jira",),
+            )
+        )
+
+    if env_value("CLAUDE_STATUSLINE_TRELLO").lower() not in ("", "0", "false"):
+        # cards have no KEY-123 form; only their links name them
+        trackers.append(
+            Tracker(
+                "trello",
+                "https://trello.com/c/{card}",
+                patterns=(r"trello\.com/c/(?P<card>[A-Za-z0-9]{8})(?![A-Za-z0-9])",),
+                key="{card}",
+                tools=("trello",),
+            )
+        )
+
+    return trackers
+
+
+TRACKERS = configured_trackers()
+# a cheap per-line filter: the trackers' regexes with their named groups dropped
+_PREFILTER = "|".join(
+    re.sub(r"\(\?P<\w+>", "(?:", r.pattern) for t in TRACKERS for r in t.regexes_i
+)
+PREFILTER_RE = re.compile(_PREFILTER.encode(), re.IGNORECASE) if _PREFILTER else None
+
+
+def keys_in(text: str, ignore_case: bool = False) -> Hits:
+    """Every tracker key in `text`; the first tracker to claim a key keeps it."""
+    hits: Hits = {}
+    for tracker in TRACKERS:
+        for regex in tracker.regexes_i if ignore_case else tracker.regexes:
+            for match in regex.finditer(text):
+                fields = {k: v for k, v in match.groupdict().items() if v is not None}
+                if fields.get("num") in PLACEHOLDER_NUMS:
+                    continue
+                if "prefix" in fields:
+                    fields["prefix"] = fields["prefix"].upper()
+                try:
+                    key = tracker.key.format(**fields)
+                    url = tracker.url.format(key=key, **fields)
+                except (KeyError, IndexError, ValueError):
+                    continue
+                hits.setdefault(key, [tracker.name, url])
+    return hits
+
+
+def is_write_tool(tool_name: str) -> bool:
+    words = {w.lower() for w in TOOL_WORD_RE.findall(tool_name.rsplit("__", 1)[-1])}
+    return bool(words & WRITE_VERBS) and not words & READ_VERBS
+
+
+def config_fingerprint() -> str:
+    raw = json.dumps([t.fingerprint() for t in TRACKERS])
+    return hashlib.sha1(raw.encode()).hexdigest()
 
 
 def load_cache(path: str) -> dict:
@@ -77,7 +217,10 @@ def load_cache(path: str) -> dict:
             cache = json.load(fh)
     except (OSError, ValueError):
         return {}
-    return cache if cache.get("version") == CACHE_VERSION else {}
+    # a tracker added or reconfigured since needs the whole transcript again
+    if cache.get("version") != CACHE_VERSION or cache.get("trackers") != config_fingerprint():
+        return {}
+    return cache
 
 
 def save_cache(path: str, cache: dict) -> None:
@@ -129,15 +272,17 @@ class Scorer:
     def __init__(self, cache: dict) -> None:
         self.scores: dict[str, float] = cache.get("scores", {})
         self.last_seen: dict[str, int] = cache.get("last_seen", {})
+        self.hits: Hits = cache.get("hits", {})
         self.seq: int = cache.get("seq", 0)
         self.prompts: int = cache.get("prompts", 0)
         self.pending: set[str] = set(cache.get("pending", []))
 
-    def add(self, keys: set[str], weight: float) -> None:
-        for key in keys:
+    def add(self, hits: Hits, weight: float) -> None:
+        for key, hit in hits.items():
             self.seq += 1
             self.scores[key] = self.scores.get(key, 0.0) + weight
             self.last_seen[key] = self.seq
+            self.hits[key] = hit
 
     def user_entry(self, entry: dict, content) -> None:
         if entry.get("isMeta") or entry.get("isCompactSummary"):
@@ -176,19 +321,23 @@ class Scorer:
         tool_input = item.get("input") or {}
         command = tool_input.get("command") if isinstance(tool_input, dict) else None
         raw = json.dumps(tool_input, ensure_ascii=False)
+        owners = {t.name for t in TRACKERS if t.owns_tool(name)}
         if name == "Skill":
             self.add(keys_in(str(tool_input.get("args") or "")), W_SKILL_ARGS)
-        elif "linear" in name.lower():
-            write = re.search(r"__(?:save|create|update|delete)_", name) is not None
-            self.add(keys_in(raw), W_LINEAR_WRITE if write else W_LINEAR_READ)
+        elif owners:
+            # a Linear write is about its Linear issue, not the incident it links
+            hits = keys_in(raw)
+            own = {k: h for k, h in hits.items() if h[0] in owners}
+            self.add(own, W_TRACKER_WRITE if is_write_tool(name) else W_TRACKER_READ)
+            self.add({k: h for k, h in hits.items() if k not in own}, W_TOOL_INPUT)
         elif isinstance(command, str):
             if GH_RE.search(command) and item.get("id"):
                 self.pending.add(item["id"])
             if GH_WRITE_RE.search(command):
                 self.add(keys_in(command), W_PR_WRITE)
-            branches = " ".join(NEW_BRANCH_RE.findall(command))
-            self.add(keys_in(branches, ignore_case=True), W_NEW_BRANCH)
-            self.add(keys_in(command) - keys_in(branches, ignore_case=True), W_TOOL_INPUT)
+            branch_hits = keys_in(" ".join(NEW_BRANCH_RE.findall(command)), ignore_case=True)
+            self.add(branch_hits, W_NEW_BRANCH)
+            self.add({k: h for k, h in keys_in(command).items() if k not in branch_hits}, W_TOOL_INPUT)
         else:
             self.add(keys_in(raw), W_TOOL_INPUT)
 
@@ -197,9 +346,11 @@ class Scorer:
             self.pending = set()
         return {
             "version": CACHE_VERSION,
+            "trackers": config_fingerprint(),
             "offset": offset,
             "scores": self.scores,
             "last_seen": self.last_seen,
+            "hits": self.hits,
             "seq": self.seq,
             "prompts": self.prompts,
             "pending": sorted(self.pending),
@@ -207,7 +358,7 @@ class Scorer:
 
 
 def main() -> int:
-    if len(sys.argv) < 3 or not TEAM_KEYS:
+    if len(sys.argv) < 3 or PREFILTER_RE is None:
         return 0
     transcript, session_id = sys.argv[1], sys.argv[2]
     branch = sys.argv[3] if len(sys.argv) > 3 else ""
@@ -237,7 +388,7 @@ def main() -> int:
 
         for raw in chunk.splitlines():
             # gh commands matter even without a key: their output may carry one
-            if not KEY_BYTES_RE.search(raw) and b"gh " not in raw:
+            if not PREFILTER_RE.search(raw) and b"gh " not in raw:
                 continue
             try:
                 entry = json.loads(raw)
@@ -254,14 +405,17 @@ def main() -> int:
 
     scores = dict(scorer.scores)
     last_seen = dict(scorer.last_seen)
-    for key in keys_in(branch, ignore_case=True):
+    hits = dict(scorer.hits)
+    for key, hit in keys_in(branch, ignore_case=True).items():
         scores[key] = scores.get(key, 0.0) + W_CURRENT_BRANCH
         last_seen.setdefault(key, 0)
+        hits.setdefault(key, hit)
+
     if not scores:
         return 0
     best = max(scores, key=lambda k: (scores[k], last_seen.get(k, 0)))
     if scores[best] >= MIN_SCORE:
-        print(best)
+        print(f"{best}\t{hits[best][1]}")
     return 0
 
 
